@@ -1,5 +1,5 @@
 # sump3
-SUMP3 an open-source logic analyzer for FPGAs. Unique in that it uses RLE hardware compression and is intended to be easily distributed across a large FPGA and capture thousands of signals while only requiring two wires between the individual compression blocks and the top level local bus interface.
+SUMP3 an open-source logic analyzer for FPGAs. Unique in that it uses RLE hardware compression and is intended to be easily distributed across a large FPGA and capture thousands of signals using multiple small and localized compression blocks called "RLE Pods". Traditional FPGA vendor provided ILAs tend to consume large amounts of RAM and routing resources to capture a large number of signals over a long period item. The goal of SUMP3 is to only require a single Block RAM (512x72 typical) for capturing dozens of signals over long periods of time via each "RLE Pod". The "RLE Pod" is small and localized with only two wires connecting it to the top level bus interface. SUMP3 can then scale to up to 2^16 RLE Pods per chip design.
 
 File List:
   sump3.py     : The Python PyGame-GUI software for setting triggers and downloading and viewing waveforms.
