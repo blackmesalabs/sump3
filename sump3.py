@@ -69,8 +69,10 @@
 # 2024.01.30 : Fixed KeyError crash in generate_pod_user_ctrl_list()
 # 2024.01.30 : Added download_rle_ondemand() which seems to work as expected
 # 2024.02.01 : Fixed load_pza. Added defer_gui_update to speed up importing View ROMs
+# 2024.02.06 : Fixed user_ctrl problems. Removed bulk_mask
+# 2024.02.07 : Fixed cmd_remove_view() not removing view from view_applied_list
+# 2024.02.09 : save_vcd() and load_vcd() improvements.
 #
-# TODO: Remove rle_bulk_mask feature
 #
 # DONE: view filter on user_ctrl bits
 # DONE: Offline mode. Should always come up and display last capture data
@@ -181,7 +183,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.02.01";
+    self.vers = "2024.02.09";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -836,6 +838,7 @@ class main:
         # Remove a view from a Window
         if ( event.ui_object_id == "#Controls.#Views.#Remove" ):
           proc_remove_view( self );
+#HERE8
 #         create_view_selections( self );
           self.refresh_waveforms = True;
           self.refresh_sig_names = True;
@@ -1077,13 +1080,8 @@ def display_text_stats( self ):
     available_selected = [ self.container_view_list[available].get_single_selection()];
     
     if len(available_selected) != 0 or len(assigned_selected) != 0:
-      rts += ["------------------"];
-
-#   print( assigned_selected[0] );
-#   print( available_selected );
-
-#   if True:
-#     for each_sel in assigned_selected + available_selected:
+#     rts += ["------------------"];
+      rts = [];
     for each_sel in assigned_selected + available_selected:
       if each_sel != None:
         rts += [ each_sel+ ":" ];
@@ -1093,13 +1091,22 @@ def display_text_stats( self ):
             rts += [" %s" % filename ];
             if each_view.timezone != None:
               rts += [" timezone = %s" % each_view.timezone ];
-#           if each_view.uut_rev_list != None:
-#             rts += [" uut_rev   = %s" % each_view.uut_rev_list  ];
             if   len( each_view.user_ctrl_list ) != 0:
               for (a,b) in each_view.user_ctrl_list:
                 rts += [" user_ctrl%s = %s" % (a,b) ];
+            try:
+              rts += [" signal_list:"];
+              file_list = file2list( each_view.filename );
+              for each_line in file_list:
+                words = " ".join(each_line.split()).split(' ') + [None] * 4;
+                if words[0] != None:
+                  if words[0] == "create_signal":
+                    if words[1] != None:
+                      rts += ["  " + words[1] ];
+            except:
+              rts += [" Failed to open %s" % (each_view.filename) ];
+            
               
-#   display_raw_text( self, rts, ( x1,y1 ), bold_i );
     self.text_stats = ( rts, (x1,y1), bold_i );
 
   # Display Panel is open. For the selected window, display info about it and 
@@ -1980,6 +1987,8 @@ def convert_object_id_to_tool_tip( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Force_Stop"  : cmd_str = "sump_force_stop";
   elif id_str == "#Controls.#Acquisition.#Save_PZA"    : cmd_str = "save_pza";
   elif id_str == "#Controls.#Acquisition.#Load_PZA"    : cmd_str = "load_pza";
+  elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
+  elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
   elif id_str == "#Controls.#Acquisition.#UUT"         : cmd_str = "load_uut";
   elif id_str == "#Controls.#Display.#Window-1"        : cmd_str = "window1";
   elif id_str == "#Controls.#Display.#Window-2"        : cmd_str = "window2";
@@ -1996,7 +2005,8 @@ def convert_object_id_to_tool_tip( self, id_str ):
   elif id_str == "#Controls.#Display.#<-Pan"           : cmd_str = "pan_left";
   elif id_str == "#Controls.#Display.#Pan->"           : cmd_str = "pan_right";
   elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
-  elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
+  elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
   elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
   elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
   elif id_str == "#Controls.#Display.#TimeSnap"        : cmd_str = "time_snap";
@@ -2138,6 +2148,8 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Clr_Trigs"   : cmd_str = "sump_clr_trigs";
   elif id_str == "#Controls.#Acquisition.#Force_Stop"  : cmd_str = "sump_force_stop";
   elif id_str == "#Controls.#Acquisition.#Save_PZA"    : cmd_str = "save_pza";
+  elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
+# elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
   elif id_str == "#Controls.#Display.#ZoomIn"          : cmd_str = "zoom_in";
   elif id_str == "#Controls.#Display.#ZoomOut"         : cmd_str = "zoom_out";
   elif id_str == "#Controls.#Display.#ZoomCurs"        : cmd_str = "zoom_to_cursors";
@@ -2147,7 +2159,8 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Display.#<-Pan"           : cmd_str = "pan_left";
   elif id_str == "#Controls.#Display.#Pan->"           : cmd_str = "pan_right";
   elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
-  elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
+  elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
   elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
   elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
   elif id_str == "#Controls.#Display.#TimeSnap"        : cmd_str = "time_snap";
@@ -2183,6 +2196,12 @@ def convert_object_id_to_cmd( self, id_str ):
     name = "load_pza";
     ext = "pza";
     path = os.path.abspath( self.vars["sump_path_pza"] );
+    cmd_file_dialog( self, name, path, ext );
+
+  elif id_str == "#Controls.#Acquisition.#Load_VCD": 
+    name = "load_vcd";
+    ext = "vcd";
+    path = os.path.abspath( self.vars["sump_path_vcd"] );
     cmd_file_dialog( self, name, path, ext );
 
   elif cmd_str == None:
@@ -2966,7 +2985,7 @@ def create_drawing_lines( self, my_win ):
           if samples_to_draw != 0:
             rle_time_to_pixels = float( w / samples_to_draw );
           else:
-            log(self,["ERROR-2372 : samples_to_draw = %d" % samples_to_draw]);
+#           log(self,["ERROR-2372 : samples_to_draw = %d" % samples_to_draw]);
             rle_time_to_pixels = None;
           if len( rle_value_time_pairs ) > 1 and rle_time_to_pixels != None:
             ( last_value, last_time ) = rle_value_time_pairs[0];
@@ -3379,14 +3398,21 @@ def create_view_selections( self ):
       if True:
         # Check to make sure this doesn't have conflicting user_ctrl values
         rejected = False;
-        for each_user_ctrl in each_view.user_ctrl_list:
-          for each_assigned_user_ctrl in self.user_ctrl_assigned_list:
-            # ("[3:0]","F")
-            (a,b) = each_user_ctrl;
-            (c,d) = each_assigned_user_ctrl;
-            if a == c and b.lower() != d.lower():
-              rejected = True; # print("Rejected! %s" % each_view.name );
-              print("View Rejection due to user_ctrl : %s" % each_view.name );
+        for each_applied_view in self.view_applied_list:
+          for (apld_hub,apld_pod,apld_user_ctrl_list) in each_applied_view.rle_hub_pod_user_ctrl_list:
+            for (hub,pod,user_ctrl_list) in each_view.rle_hub_pod_user_ctrl_list:
+              if apld_hub == hub and apld_pod == pod:
+                for (apld_bitrip,apld_val) in apld_user_ctrl_list:
+                  for (bitrip,val) in user_ctrl_list:
+#                   print( apld_bitrip, apld_val, bitrip, val );
+                    if apld_bitrip == bitrip and apld_val != val:
+                      rejected = True;
+#                     print("View Rejection due to user_ctrl : %s" % each_view.name );
+                
+#HERE6
+# from class view
+#   self.rle_hub_pod_list = [];# (hub,pod) tuples assigned to this view
+#   self.rle_hub_pod_user_ctrl_list = [];# (hub,pod,user_ctrl_list) tuples assigned to this view
 
         # Once a window has a timezone, reject views of different timezones
         if each_view.timezone != None and my_win.timezone != None:
@@ -3491,9 +3517,13 @@ def init_widgets(self):
   button_txt_list = [ "UUT",         "Connect",
                       "Arm",         "Acquire",
                       "Query",       "Download",
-                      "Save_PZA",    "Load_PZA",
                       "Force_Trig",  "Force_Stop",    
-                      "Set_Trigs",   "Clr_Trigs"   ];
+                      "",
+                      "Save_PZA",    "Load_PZA",
+                      "Save_VCD",    "Load_VCD",
+                      "",
+                      "Set_Trigs",   "Clr_Trigs",
+                    ];
 
   y_top += container_builder_acquisition( self, rect, self.y_top, button_txt_list );
 
@@ -3508,7 +3538,7 @@ def init_widgets(self):
                       "Window-3",     "bd_shell",
                       "Font--",       "Font++",
                       "",
-                      "Save_VCD",     "Save_PNG",      
+                      "Save_PNG",     "Save_JPG",      
                       "Save_List",    "Save_View",      
                       "",
                       "MaskSig",      "HideSig",     
@@ -3524,9 +3554,8 @@ def init_widgets(self):
 
   # Remove these buttons if the screen is really short. User will have to use
   # bd_shell CLI interface to get these features.
-  small_scrn_list = [ "Font++",       "Font--",
+  small_scrn_list = [ "Font--",       "Font++",
                       "",
-#                     "Save_VCD",     "Save_PNG",      
                       "Save_List",    "Save_View",      
                       "",
                       "CopySig",      "PasteSig",     
@@ -3719,15 +3748,18 @@ def container_builder_acquisition( self, rect, y_top, button_txt_list ):
     h = 20;
   col = 0;
   for each in button_txt_list:
-    x1 = x + ( col * w ) + ( col*margin*2 );
-    col += 1;
-    self.container_acquisition_list += [ UIButton( relative_rect = pygame.Rect(x1,y,w,h),
-      text = each, object_id="#"+each, tool_tip_text = each+" Tool Tip",
-      visible = True, container = my_container, manager = self.ui_manager,
-      allow_double_clicks = False) ];
-    if ( col == 2 ):
-      y += h + margin;
-      col = 0;
+    if each != "":
+      x1 = x + ( col * w ) + ( col*margin*2 );
+      col += 1;
+      self.container_acquisition_list += [ UIButton( relative_rect = pygame.Rect(x1,y,w,h),
+        text = each, object_id="#"+each, tool_tip_text = each+" Tool Tip",
+        visible = True, container = my_container, manager = self.ui_manager,
+        allow_double_clicks = False) ];
+      if ( col == 2 ):
+        y += h + margin;
+        col = 0;
+    else:
+      y += int(1.5 * margin);# Extra spacing between unrelated buttons
 
   x1 = x; w = w * 2 + (margin*2);
 # self.container_acquisition_list += [ UIHorizontalSlider( (x1,y,w,h),
@@ -4952,7 +4984,8 @@ def generate_view_rom_files( self, view_rom_list ):
       view_list = [];
       # Update the GUI List
       ( null , file_no_path ) = os.path.split( file_name );
-      cmd_add_view_ontap(self, ["add_view_ontap", file_no_path ] ); 
+      cmd_add_view_ontap(self, ["add_view_ontap", file_no_path, "defer_gui_update" ] ); 
+  create_view_selections( self );# Ugly putting this here
   return;
 
 
@@ -5189,16 +5222,17 @@ def cmd_sump_arm( self ):
   rle_mask_hash = proc_rle_mask(self, self.sump.rle_hub_pod_list );
   for (hub,each_pod_list) in enumerate( self.sump.rle_hub_pod_list ):
     for (pod,each_pod) in enumerate( each_pod_list ):
-      (bit_mask,bulk_mask) = rle_mask_hash[(hub,pod)];
+#     (bit_mask,bulk_mask) = rle_mask_hash[(hub,pod)];
+      (bit_mask          ) = rle_mask_hash[(hub,pod)];
       reg = self.sump.rle_pod_addr_rle_bit_mask;# RLE Bit Mask bits 0-31              
       self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, ((hub<<16)+(pod<<8)+(reg<<0)) );
       self.sump.wr( self.sump.cmd_wr_rle_pod_data, bit_mask  );
 
-      reg = self.sump.rle_pod_addr_rle_bulk_mask;# RLE Bulk Mask bits 0-31              
-      self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, ((hub<<16)+(pod<<8)+(reg<<0)) );
-      self.sump.wr( self.sump.cmd_wr_rle_pod_data, bulk_mask );
-      log( self, ["  RLE Hub-%d, Pod-%d : Bit Mask=%08x Bulk Mask=%08x" % \
-        (hub,pod,bit_mask,bulk_mask)] );
+#     reg = self.sump.rle_pod_addr_rle_bulk_mask;# RLE Bulk Mask bits 0-31              
+#     self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, ((hub<<16)+(pod<<8)+(reg<<0)) );
+#     self.sump.wr( self.sump.cmd_wr_rle_pod_data, bulk_mask );
+#     log( self, ["  RLE Hub-%d, Pod-%d : Bit Mask=%08x Bulk Mask=%08x" % \
+#       (hub,pod,bit_mask,bulk_mask)] );
 
   log( self, ["Processing RLE Triggers"] );
   for (hub,each_pod_list) in enumerate( self.sump.rle_hub_pod_list ):
@@ -5251,22 +5285,23 @@ def decode_adc_ch_number( each_sig ):
       rts = int( words[2],10 );
   return rts;
 
-
+# OLD vvvv
 # RLE Pods have individual mask bits for signals 0-31. For signals
 # above 32, there are 32 bulk mask bits which are divided evenly.
 # Instead of calculating the bulk mask bits, masking of any signal
 # in that region will mask ALL the signals in that region. This is
 # to keep the initial software simple.
+# OLD ^^^^
+
+# RLE Pods have individual mask bits for signals 0-31 only.       
 def proc_rle_mask( self, rle_hub_pod_list ):
-  # rle_mask_hash[ (hub,pod ) ] = ( bit_mask, bulk_mask );
   rle_mask_hash = {};
   for (hub,each_pod_list) in enumerate( rle_hub_pod_list ):
     for (pod,each_pod) in enumerate( each_pod_list ):
       bit_mask  = 0x00000000;
-      bulk_mask = 0x00000000;
+#     bulk_mask = 0x00000000;
       # signal.source = "digital_rle[0][1][3:0]"
       for each_sig in self.signal_list:
-#       print("Oy", each_sig.name, each_sig.source );
         if each_sig.source == None:
           pass;# Probably a group
         elif each_sig.rle_masked and "digital_rle" in each_sig.source:
@@ -5287,45 +5322,48 @@ def proc_rle_mask( self, rle_hub_pod_list ):
             bit_bot = bit_top;
           if ( hub == hub_i and pod == pod_i ):
             for i in range( bit_bot, bit_top+1 ):
-              if i >= 32:
-                bulk_mask = 0xFFFFFFFF;
-              else:
+#             if i >= 32:
+#               bulk_mask = 0xFFFFFFFF;
+#             else:
+#               bit_mask = bit_mask | ( 2**i );
+              if i < 32:
                 bit_mask = bit_mask | ( 2**i );
-            print("Masked : %s %s %s %s %s %s %08x %08x" % \
-             ( each_sig.name, each_sig.source,\
-             hub_i,pod_i,bit_top,bit_bot,bit_mask,bulk_mask) );
+#           print("Masked : %s %s %s %s %s %s %08x %08x" % \
+#            ( each_sig.name, each_sig.source,\
+#            hub_i,pod_i,bit_top,bit_bot,bit_mask,bulk_mask) );
 
             # If bulk_mask is non-zero we have to delete and set rle_masked
             # for all signals in the bulk mask region. This is a short term
             # solution until I figure out how to use bulk mask bits with
             # granularity
-            if bulk_mask == 0xFFFFFFFF:
-              for my_sig in self.signal_list:
-                if my_sig.source != None and "digital_rle" in my_sig.source:
-                  a = my_sig.source;
-                  a = a.replace("["," [ ");
-                  a = a.replace("]"," ] ");
-                  a = a.replace(":"," : ");
-                  #           0      1 2 3 4 5 6 7 8 9 10 11
-                  # a = "digital_rle [ 0 ] [ 1 ] [ 3 : 0 ]"
-                  words = " ".join(a.split()).split(' ') + [None] * 5;
-                  hub_i = int( words[2],10 );
-                  pod_i = int( words[5],10 );
-                  if words[9] == ":":
-                    bit_top = int( words[8],10 );
-                    bit_bot = int( words[10],10 );
-                  else:
-                    bit_top = int( words[8],10 );
-                    bit_bot = bit_top;
-                  if ( hub == hub_i and pod == pod_i ):
-                    if bit_top >= 32 or bit_bot >= 32:
-                      if not my_sig.rle_masked:
-                        my_sig.visible = False;
-                        my_sig.rle_masked = True;
-                        print("Bulk Mask removal of : %s %s" % \
-                          ( each_sig.name, each_sig.source ));
-        
-      rle_mask_hash[(hub,pod)] = ( bit_mask, bulk_mask );
+#           if bulk_mask == 0xFFFFFFFF:
+#             for my_sig in self.signal_list:
+#               if my_sig.source != None and "digital_rle" in my_sig.source:
+#                 a = my_sig.source;
+#                 a = a.replace("["," [ ");
+#                 a = a.replace("]"," ] ");
+#                 a = a.replace(":"," : ");
+#                 #           0      1 2 3 4 5 6 7 8 9 10 11
+#                 # a = "digital_rle [ 0 ] [ 1 ] [ 3 : 0 ]"
+#                 words = " ".join(a.split()).split(' ') + [None] * 5;
+#                 hub_i = int( words[2],10 );
+#                 pod_i = int( words[5],10 );
+#                 if words[9] == ":":
+#                   bit_top = int( words[8],10 );
+#                   bit_bot = int( words[10],10 );
+#                 else:
+#                   bit_top = int( words[8],10 );
+#                   bit_bot = bit_top;
+#                 if ( hub == hub_i and pod == pod_i ):
+#                   if bit_top >= 32 or bit_bot >= 32:
+#                     if not my_sig.rle_masked:
+#                       my_sig.visible = False;
+#                       my_sig.rle_masked = True;
+#                       print("Bulk Mask removal of : %s %s" % \
+#                         ( each_sig.name, each_sig.source ));
+#       
+#     rle_mask_hash[(hub,pod)] = ( bit_mask, bulk_mask );
+      rle_mask_hash[(hub,pod)] = ( bit_mask );
   return rle_mask_hash;
 
 
@@ -5373,7 +5411,8 @@ def cmd_sump_set_trigs( self ):
               trig_field = trig_field | 2**i;
               self.vars["sump_rle_hub_%d_pod_%d_trigger_field" % (hub,pod) ] = "%08x" % trig_field;
               rts +=   ["sump_rle_hub_%d_pod_%d_trigger_field = %08x" % ( hub,pod,trig_field )];
-        
+  sump_trigger_count = sum(bool(each.trigger) for each in self.signal_list);      
+  self.vars["sump_trigger_count"] =  "%d" % sump_trigger_count;
   self.refresh_sig_names = True;
   return rts;
 
@@ -5395,6 +5434,8 @@ def cmd_sump_clr_trigs( self ):
       trig_field = 0x00000000;
       self.vars["sump_rle_hub_%d_pod_%d_trigger_field" % (hub,pod) ] = "%08x" % trig_field;
 
+  sump_trigger_count = sum(bool(each.trigger) for each in self.signal_list);      
+  self.vars["sump_trigger_count"] =  "%d" % sump_trigger_count;
   self.refresh_sig_names = True;
   return;
 
@@ -6004,7 +6045,8 @@ def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
 
   # TODO: Don't recalulate this every time. Use a stored version
   rle_mask_hash = proc_rle_mask(self, self.sump.rle_hub_pod_list );
-  (rle_bit_mask,rle_bulk_mask) = rle_mask_hash[(hub_num,pod_num)];
+# (rle_bit_mask,rle_bulk_mask) = rle_mask_hash[(hub_num,pod_num)];
+  (rle_bit_mask )              = rle_mask_hash[(hub_num,pod_num)];
 
   a = [];
 # a+=[ ("#[rle_pod_start]"                                   )];
@@ -6018,8 +6060,7 @@ def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
   a+=[ ("# data_bits        = %d"   % ( pod_num_data_bits  ) )];
   a+=[ ("# pod_user_ctrl    = %08x" % ( pod_user_ctrl      ) )];
   a+=[ ("# rle_bit_mask     = %08x" % ( rle_bit_mask       ) )];
-  a+=[ ("# rle_bulk_mask    = %08x" % ( rle_bulk_mask      ) )];
-# a+=[ ("# rle_mask         = %08x" % ( rle_mask           ) )];
+# a+=[ ("# rle_bulk_mask    = %08x" % ( rle_bulk_mask      ) )];
 # a+=[ ("# trigger_src      = %08x" % ( rle_pod_trig_src   ) )];
   a+=[ ("# trig_lat_core_ck = %d"   % ( pod_trig_lat_core_cks ) )];
   a+=[ ("# trig_lat_mosi_ck = %d"   % ( pod_trig_lat_mosi_cks ) )];
@@ -6055,8 +6096,8 @@ def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
            % ( hub_num,pod_num,j,(num_dwords-1) ) );
 
       # Set the Page to read out RLE samples, timestamps and 2bit codes
-      print("sump_rlepod_download() : Hub = %d : Pod = %d : RAM Length = %d " % \
-        ( hub_num, pod_num,rle_ram_length ) );
+      print("sump_rlepod_download() : Hub = %d : Pod = %d : Page %d :  RAM Length = %d " % \
+        ( hub_num, pod_num, j, rle_ram_length ) );
       self.sump.wr_pod( hub=hub_num,pod=pod_num,
                         reg=self.sump.rle_pod_addr_ram_page_ptr, data=((j<<20)+0x0000) );
       pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
@@ -6438,8 +6479,8 @@ def create_sump_digital_rle( self, file_in, file_out ):
       for i in range( 0, len(data_bin) ):
         if (i<32) and ( ((2**i) & int(pod_dict["rle_bit_mask"],16) ) != 0 ):
           data_bin_masked += "X";
-        elif (i>=32) and ( int(pod_dict["rle_bulk_mask"],16) == 0xFFFFFFFF ):
-          data_bin_masked += "X";
+#       elif (i>=32) and ( int(pod_dict["rle_bulk_mask"],16) == 0xFFFFFFFF ):
+#         data_bin_masked += "X";
         else:
           data_bin_masked += data_bin[i];
 
@@ -7079,9 +7120,9 @@ class view(object):
 # def __init__( self, name="foo", timezone="bar" ):
   def __init__( self, name="foo" ):
     self.name             = name;
+    self.filename         = None;
     self.timezone         = None;
 #   self.timezone         = timezone;
-    self.filename         = None;
     self.window           = None;
     self.color            = None;
 #   self.uut_rev_list     = None;
@@ -7132,6 +7173,8 @@ class sump_virtual:
       j = int( words[1], 10 );# Pod 0-255
       words = hub_pod_name.split(".") + [None] * 8; # Avoid IndexError
       self.rle_hub_pod_dict[ words[2]+"."+words[5] ] = (i,j);
+    return;
+  def wr ( self, cmd, data ):
     return;
 # def rd_status( self ):
 #   self.cfg_dict['hw_id']       = ( hwid_data & 0xFFFF0000 ) >> 16;
@@ -7208,7 +7251,7 @@ class sump3_hw:
     self.rle_pod_addr_trigger_cfg     = 0x03;# Trigger Location, Trigger Type  
     self.rle_pod_addr_trigger_en      = 0x04;# Trigger Enable bits 0-31        
     self.rle_pod_addr_rle_bit_mask    = 0x05;# RLE Bit Mask bits 0-31              
-    self.rle_pod_addr_rle_bulk_mask   = 0x06;# RLE Bulk Mask bits 0-31              
+#   self.rle_pod_addr_rle_bulk_mask   = 0x06;# RLE Bulk Mask bits 0-31              
     self.rle_pod_addr_comp_value      = 0x07;# Comparator Value                
     self.rle_pod_addr_ram_page_ptr    = 0x08;# Page[7:0], Pointer[19:0]        
     self.rle_pod_addr_ram_data        = 0x09;# RAM Data[31:0] from Page Mux    
@@ -7627,8 +7670,10 @@ class sump3_hw:
             txt = txt.replace("uc[", "user_ctrl[");
             txt = txt.replace("=", " ");
             rts[-1] = rts[-1] + " " + txt;
-          else:
+          elif txt != "":
             rts += [ txt ];
+#         else:
+#           rts += [ txt ];
 #HERE5
 
 
@@ -7870,6 +7915,7 @@ def init_globals( self ):
   self.acq_parm_list += [("Trig Delay",    "sump_trigger_delay",    "uS")];
   self.acq_parm_list += [("Trig Nth  ",    "sump_trigger_nth",      "")];
   self.acq_parm_list += [("Trig Pos  ",    "sump_trigger_location", "%")];
+  self.acq_parm_list += [("Num Trigs ",    "sump_trigger_count",    "")];
 
 
   self.acq_trig_list = [];
@@ -7926,6 +7972,7 @@ def init_vars( self, file_ini ):
   vars["sump_trigger_field"        ] = "00000000";
   vars["sump_trigger_delay"        ] = "0.0";# uS
   vars["sump_trigger_nth"          ] = "1";
+  vars["sump_trigger_count"        ] = "0";
   vars["sump_trigger_location"     ] = "50.0";
   vars["sump_trigger_analog_level" ] = "100.0";
   vars["sump_trigger_analog_ch"    ] = "0";
@@ -7961,13 +8008,13 @@ def init_vars( self, file_ini ):
 # vars["vcd_group_names"           ] = "1";
 # vars["vcd_full_capture_width"    ] = "0";
 
+  vars["list_csv_format"]   = "0";
   vars["vcd_hierarchical"]  = "1";
   vars["vcd_hubpod_names"]  = "0";
   vars["vcd_hubpod_nums"]   = "0";
   vars["vcd_group_names"]   = "0";
-  vars["vcd_remove_rips"]   = "1";
-  vars["vcd_replace_rips"]  = "0";
-  vars["list_csv_format"]   = "0";
+# vars["vcd_remove_rips"]   = "1";
+# vars["vcd_replace_rips"]  = "0";
 
   vars["scroll_wheel_glitch_lpf_en" ] = "1";
   vars["scroll_wheel_pan_en"        ] = "1";
@@ -7986,7 +8033,8 @@ def init_vars( self, file_ini ):
     "sump_path_vcd","sump_path_view",
     "sump_script_remote",
     "vcd_hierarchical", "vcd_hubpod_names", "vcd_hubpod_nums","vcd_group_names", 
-    "vcd_remove_rips", "vcd_replace_rips","list_csv_format",
+#   "vcd_remove_rips", "vcd_replace_rips",
+    "list_csv_format",
     "sump_download_disable_ls", "sump_download_disable_hs", "sump_download_disable_rle",
     "sump_download_ondemand",
     "scroll_wheel_glitch_lpf_en",
@@ -8308,7 +8356,9 @@ def cmd_create_signal( self, words ):
       if (hub,pod) not in my_sig.view_obj.rle_hub_pod_list:
         log( self, ["Adding Hub-Pod (%d,%d) to View %s" % (hub,pod,my_sig.view_obj.name) ] );
         my_sig.view_obj.rle_hub_pod_list += [ (hub,pod) ];
-      my_sig.view_obj.rle_hub_pod_user_ctrl_list += [ (hub,pod,my_sig.user_ctrl_list) ];
+# 2024.02.05
+#     my_sig.view_obj.rle_hub_pod_user_ctrl_list += [ (hub,pod,my_sig.user_ctrl_list) ];
+      my_sig.view_obj.rle_hub_pod_user_ctrl_list += [ (hub,pod,my_sig.user_ctrl_list[:]) ];
 
   signal_list_modified(self);
 # self.refresh_waveforms = True;
@@ -8357,6 +8407,7 @@ def signal_attribute_inheritance( self, my_sig ):
           if each_group.timezone != None:
             my_sig.timezone = each_group.timezone;
           if len( each_group.user_ctrl_list ) != 0:
+            print("1", my_sig.name );
 #           my_sig.user_ctrl_list += each_group.user_ctrl_list;
             for each_user_ctrl in each_group.user_ctrl_list:
               if each_user_ctrl not in my_sig.user_ctrl_list:
@@ -8375,6 +8426,7 @@ def signal_attribute_inheritance( self, my_sig ):
           for each_user_ctrl in each_view.user_ctrl_list:
             if each_user_ctrl not in my_sig.user_ctrl_list:
               my_sig.user_ctrl_list += [ each_user_ctrl ];
+    
 
   # If a signal has no color, inherit one from group, view or use default foreground
   if my_sig.color == None and my_sig.member_of != None:
@@ -8423,26 +8475,26 @@ def recursive_parent_count( self, my_sig, count ):
 #####################################
 def cmd_debug( self, words ):
 ##HERE2
-  print( self.window_list );
-  for (i,each_win) in enumerate( self.window_list ):
-    print("---------");
-    print("Window-%d" % i );
-    print(each_win.name);
-    print(each_win.timezone);
-    print(each_win.view_list);
-#   print(each_win.draw_list);
-#   print(each_win.signal_list);
-    print(each_win.zoom_pan_list);
-    print(each_win.sample_period);
-    print(each_win.sample_unit);
-    print(each_win.trigger_index);
-    print(each_win.samples_total);
-    print(each_win.samples_shown);
-    print(each_win.samples_start_offset);
-    print(each_win.x_space);
-    print(each_win.cursor_x_list);
-    print(each_win.panel.visible);
-    print(each_win.panel.relative_rect);# ( x,y,w,h )
+# print( self.window_list );
+# for (i,each_win) in enumerate( self.window_list ):
+#   print("---------");
+#   print("Window-%d" % i );
+#   print(each_win.name);
+#   print(each_win.timezone);
+#   print(each_win.view_list);
+#   print(each_win.zoom_pan_list);
+#   print(each_win.sample_period);
+#   print(each_win.sample_unit);
+#   print(each_win.trigger_index);
+#   print(each_win.samples_total);
+#   print(each_win.samples_shown);
+#   print(each_win.samples_start_offset);
+#   print(each_win.x_space);
+#   print(each_win.cursor_x_list);
+#   print(each_win.panel.visible);
+#   print(each_win.panel.relative_rect);# ( x,y,w,h )
+  for each_applied_view in self.view_applied_list:
+    print( each_applied_view.name );
   return;
 
 
@@ -8966,8 +9018,14 @@ def cmd_add_view_ontap( self, words, defer_gui_update = False ):
     file_list = [];
 
   # New 2023.12.13
-  if words[1] == None:
-    words[1] = "*.txt";
+  if len(words) >=2 :
+    if words[1] == None:
+      words[1] = "*.txt";
+
+  if len(words) >=3 :
+    if words[2] != None:
+      if words[2] == "defer_gui_update":
+        defer_gui_update = True;
 
   # look for saved view files
   file_path = self.vars["sump_path_view"];
@@ -8987,6 +9045,7 @@ def cmd_add_view_ontap( self, words, defer_gui_update = False ):
     file_lines = file2list( each_file );
     if any( "create_view" in each for each in file_lines ):
       for each in file_lines:
+#       print(each);
         words = " ".join(each.split()).split(' ') + [None] * 4;
         if words[0] == "create_view":
           if words[1] != None:
@@ -9027,15 +9086,66 @@ def cmd_add_view_ontap( self, words, defer_gui_update = False ):
               my_view.timezone = "hs";
             if any( "-source digital_rle" in each2 for each2 in file_lines ):
               my_view.timezone = "rle";
-#           if my_view.timezone == None:
-#             log(self,["add_view_ontap() WARNING: Unable to infer a timezone for %s" % ( my_view.name )]);
-#           else:
-#             log(self,["add_view_ontap() NOTE: Inferring timezone %s for %s" % ( my_view.timezone, my_view.name )]);
+            if my_view.timezone == None:
+              log(self,["WARNING: Inferring rle timezone even though '-source digital_rle' not found"]);
+              my_view.timezone = "rle";
+              # NOTE: This happens if instead of "-source digital_rle[0][1][2]" it's -"source hub0.pod1[2]"
+
+          # If rle, we need to make a (hub,pod) list so that we know what any user_ctrl is being
+          # applied to and may conflict with
+          if my_view.timezone == "rle":
+            for each2 in file_lines:
+              if "-user_ctrl" in each2:
+#               print("1");
+                words = " ".join(each2.split()).split(' ');
+                for (i,each_word) in enumerate( words ):
+                  if "-user_ctrl" in each_word:
+#                   print("2");
+                    bit_rip = each_word.replace("-user_ctrl","");# "-user_ctrl[2:1]" becomes "[2:1]"
+                    bit_val = words[i+1];
+#                   print("--> %s : %s %s" % ( my_view.name, bit_rip, bit_val ) );
+                    if ( (bit_rip,bit_val) not in my_view.user_ctrl_list ):
+                      my_view.user_ctrl_list += [ (bit_rip,bit_val) ];
+
+              if "-source " in each2:
+#             if "-source digital_rle" in each2:
+#               print("-->", each2 );
+                # -source can either be "digital_rle[0][1][2]" or "hub0.pod1[2]"
+                # look for hub0.pod1[2] and if found replace with digital_rle[0][1][2] 
+                hub_num = None; pod_num = None;
+                if self.sump != None:
+                  for key in self.sump.rle_hub_pod_dict:
+                    search_str = "-source " + key;
+                    if search_str in each2:
+                      (hub_num,pod_num) = self.sump.rle_hub_pod_dict[key];
+                if hub_num == None:
+                  each2 = each2.replace("["," ");
+                  each2 = each2.replace("]"," ");
+                  words = " ".join(each2.split()).split(' ');
+#                 print( words );
+                  for (i,each_word) in enumerate( words ):
+                    if each_word == "-source":
+                      hub_num = int( words[i+2] );
+                      pod_num = int( words[i+3] );
+#                 print("Oy %s %d %d" % ( my_view.name, hub_num, pod_num ) );
+                if (hub_num,pod_num) not in my_view.rle_hub_pod_list:
+                  my_view.rle_hub_pod_list += [ (hub_num,pod_num ) ];
+                  my_view.rle_hub_pod_user_ctrl_list += [ (hub_num,pod_num,my_view.user_ctrl_list[:] ) ];
+#                   print( my_view.rle_hub_pod_list, my_view.rle_hub_pod_user_ctrl_list );
+                  
+#   self.rle_hub_pod_list = [];# (hub,pod) tuples assigned to this view
+#   self.rle_hub_pod_user_ctrl_list = [];# (hub,pod,user_ctrl_list) tuples assigned to this view
+#HERE7
+
+          log(self,["View %s rle_hub_pod_list = %s" % ( my_view.name, my_view.rle_hub_pod_list )]);
           log(self,["add_view_ontap() %s at %s" % ( my_view.name, my_view.filename )]);
           self.view_ontap_list += [ my_view ];
   if defer_gui_update == False:
     create_view_selections( self );
   return rts;
+# from class view
+#   self.rle_hub_pod_list = [];# (hub,pod) tuples assigned to this view
+#   self.rle_hub_pod_user_ctrl_list = [];# (hub,pod,user_ctrl_list) tuples assigned to this view
 
 
 #####################################
@@ -9309,6 +9419,12 @@ def cmd_remove_view( self, words ):
         view_obj_list += [ each_view ];
         del self.window_list[win_num].view_list[i];
         rts += ["remove_view() %s" % view_name];
+ 
+        # Remove that view from the view_applied_list 
+        for (j,each_applied_view) in enumerate( self.view_applied_list ):
+          if each_applied_view == each_view:
+            del self.view_applied_list[j];
+          
 
     # Also need to remove any signal associated with that view from the signal list
     # Note the you can't "del " multiple items, so build a new list
@@ -9791,8 +9907,11 @@ def cmd_save_vcd( self, words ):
   vcd_hubpod_names = ( self.vars["vcd_hubpod_names"].lower() in ["true","yes","1"] );
   vcd_hubpod_nums  = ( self.vars["vcd_hubpod_nums"].lower() in ["true","yes","1"] );
   vcd_group_names  = ( self.vars["vcd_group_names"].lower()  in ["true","yes","1"] );
-  vcd_remove_rips  = ( self.vars["vcd_remove_rips"].lower() in ["true","yes","1"] );
-  vcd_replace_rips = ( self.vars["vcd_replace_rips"].lower() in ["true","yes","1"] );
+# vcd_remove_rips  = ( self.vars["vcd_remove_rips"].lower() in ["true","yes","1"] );
+# vcd_replace_rips = ( self.vars["vcd_replace_rips"].lower() in ["true","yes","1"] );
+
+  vcd_remove_rips = True;
+  vcd_replace_rips = False;
 
   # See class_rl2vcd.py from Sump2 project
   signal_names = [];   # [ (name,bits),(name,bits) ]
@@ -9838,7 +9957,7 @@ def cmd_save_vcd( self, words ):
     max_time = 0;
     for each_sig in signal_list:
       if each_sig.hidden == False and each_sig.visible == True:
-#       if each_sig.source != None:
+        # If signals are selected, only export those. Otherwise export all signals
         if each_sig.source != None and ( each_sig.selected == True or none_selected == True ) :
           if "digital_rle" in each_sig.source:
             sig_name = each_sig.name;
@@ -10011,7 +10130,7 @@ def cmd_save_vcd( self, words ):
     rts += [ "$enddefinitions $end"];
     rts += [ "#0" ];
     rts += [ "$dumpvars"];
-    rts += [ "$end"];
+#   rts += [ "$end"];
     footer = rts[:];
 
     rts = header[:];
@@ -10031,11 +10150,20 @@ def cmd_save_vcd( self, words ):
           signal_ch_code += [ ch_ptr ]; ch_ptr +=1;
           rts += [ "$var wire 1 " + ch_code + " " + sig_name + " $end" ];
         else:
+# 2024.02.09
+#         signal_ch_code += [ ch_ptr ];
+#         for i in range(0,sig_width):
+#           ch_code = char_code[ ch_ptr ]; ch_ptr +=1;
+#           bit = sig_width-1-i;
+#           rts += [ "$var wire 1 "+ch_code+" "+sig_name+" [%d] $end" % bit ];
           signal_ch_code += [ ch_ptr ];
-          for i in range(0,sig_width):
-            ch_code = char_code[ ch_ptr ]; ch_ptr +=1;
-            bit = sig_width-1-i;
-            rts += [ "$var wire 1 "+ch_code+" "+sig_name+" [%d] $end" % bit ];
+          ch_code = char_code[ ch_ptr ]; ch_ptr +=1;
+          txt = "$var wire %d " % sig_width;
+          txt += ch_code + " ";
+          txt += sig_name+" [%d:0] $end" % ( sig_width-1 );
+          rts += [ txt ];
+#         rts += [ "$var wire %d " % sig_width +ch_code+" "+sig_name+" [%d:0] $end" % sig_width-1];
+
     rts +=  footer;
 
     # Create a list that has next RLE timestamp and index for each signal
@@ -10089,14 +10217,24 @@ def cmd_save_vcd( self, words ):
               rts += [ val + ch_code ];
             else:
               bit = 1;
+              val = "";
               for j in range(0,sig_width):
-                if ( rle_value == -1 ): val = "x";
+# 2024.02.09
+#               if ( rle_value == -1 ): val = "x";
+#               else:
+#                 if ( ( rle_value & bit ) == 0 ): val = "0";
+#                 else                           : val = "1";
+#               bit = bit << 1;
+#               ch_code = char_code[ signal_ch_code[ i ]+sig_width-1-j ];
+#               rts += [ val + ch_code ];
+                if ( rle_value == -1 ): val += "x";
                 else:
-                  if ( ( rle_value & bit ) == 0 ): val = "0";
-                  else                           : val = "1";
+                  if ( ( rle_value & bit ) == 0 ): val += "0";
+                  else                           : val += "1";
                 bit = bit << 1;
-                ch_code = char_code[ signal_ch_code[ i ]+sig_width-1-j ];
-                rts += [ val + ch_code ];
+              ch_code = char_code[ signal_ch_code[ i ] ];
+              val = "b" + val[::-1];# Reverse bit ordering and add the "b" for binary
+              rts += [ val + " " + ch_code ];
 
           # Advance next RLE time for this signal if there are samples left
           if ( rle_index+1 < len( signal_samples[i] ) ):
@@ -10127,6 +10265,16 @@ def cmd_save_vcd( self, words ):
       list2file( filename, vcd_list );
     except:
       rts = [ "ERROR Saving %s" % filename ];
+  return rts;
+
+
+#####################################
+# Convert Verilog VCD to RLE dataset
+def cmd_load_vcd( self, words ):
+  rts = [];
+  rts += ["load_vcd() : THIS FEATURE IS NOT YET IMPLEMENTED"];
+  cmd = words[0];
+  filename = words[1];
   return rts;
 
 
@@ -11045,6 +11193,8 @@ def proc_cmd( self, cmd ):
   elif cmd_txt == "save_pza"          : rts = cmd_save_pza(self,words); valid = True;
   elif cmd_txt == "load_pza"          : rts = cmd_load_pza(self,words); valid = True;
   elif cmd_txt == "load_uut"          : rts = cmd_load_uut(self,words); valid = True;
+  elif cmd_txt == "load_vcd"          : rts = cmd_load_vcd(self,words); valid = True;
+  elif cmd_txt == "save_vcd"          : rts = cmd_save_vcd( self, words ); valid = True;
   elif cmd_txt == "gui_minimize"      : rts = cmd_gui_minimize(self,words); valid = True;
 # elif cmd_txt == "gui_fullscreen"    : rts = cmd_gui_fullscreen(self,words); valid = True;
   elif cmd_txt == "r"                 : rts = cmd_read(self, words ); valid = True;
@@ -11084,7 +11234,6 @@ def proc_cmd( self, cmd ):
   elif cmd_txt == "save_png"          : rts = cmd_save_pic( self, words ); valid = True;
   elif cmd_txt == "save_jpg"          : rts = cmd_save_pic( self, words ); valid = True;
   elif cmd_txt == "save_bmp"          : rts = cmd_save_pic( self, words ); valid = True;
-  elif cmd_txt == "save_vcd"          : rts = cmd_save_vcd( self, words ); valid = True;
   elif cmd_txt == "save_view"         : rts = cmd_save_view( self, words ); valid = True;
   elif cmd_txt == "save_list"         : rts = cmd_save_list( self, words ); valid = True;
   elif cmd_txt == "add_grid"          : rts = cmd_add_grid( self, words ); valid = True;

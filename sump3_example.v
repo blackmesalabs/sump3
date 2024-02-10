@@ -116,6 +116,8 @@ module sump3_example
   wire [31:0] sump3_uut_ls;
   wire [63:0] sump3_uut_hs;
   wire [31:0] pod0_user_ctrl;
+  wire [31:0] pod0_user_stim;
+  wire [31:0] pod0_user_stat;
   reg  [2:0]  test_cnt;
 
 
@@ -312,8 +314,11 @@ u0_sump3_rle_pod
   .events            ( sump3_uut_pod0[3:0]     ),
   .pod_mosi          ( pod_mosi[0]             ),
   .pod_miso          ( pod_miso[0]             ),
+  .pod_user_stim     ( pod0_user_stim[31:0]    ),
+  .pod_user_stat     ( pod0_user_stat[31:0]    ),
   .pod_user_ctrl     ( pod0_user_ctrl[31:0]    )
 );
+  assign pod0_user_stat = pod0_user_stim[31:0] + 1;
 
 
 //-----------------------------------------------------------------------------
@@ -631,10 +636,10 @@ sump3_core
   .ana_ram_depth_bits (  10        ),
   .ana_ram_width      (  32        ),                      
 
-  .dig_hs_enable      (  1         ),
-  .dig_ram_depth_len  (  512       ),
-  .dig_ram_depth_bits (  9         ),
-  .dig_ram_width      (  64        ),// Must be units of 32
+//.dig_hs_enable      (  1         ),
+//.dig_ram_depth_len  (  512       ),
+//.dig_ram_depth_bits (  9         ),
+//.dig_ram_width      (  64        ),// Must be units of 32
 
   .rle_hub_num        (  2         ),// Number of RLE Hubs connector to this core
 
@@ -649,47 +654,47 @@ sump3_core
    {
      64'd0,                                      // Required 2-DWORD postamble
      8'hF0,                                      // ROM Start
-     8'hF1, "hs_view_name",                      // Name for this view
-     8'hF4, "digital_hs",                        // Signal source 
-     8'hF5, "hs_group_name",                     // Make a top level group
-       8'hF6, 16'd0,         "psu_fault",        // Bit
-       8'hF6, 16'd1,         "tx_cadence",       // Bit
-       8'hF6, 16'd2,         "tx_waveform",      // Bit
-       8'hF6, 16'd3,         "tx_receive",       // Bit
-       8'hF6, 16'd4,         "psu_fsm_st0",      // Bit
-       8'hF6, 16'd5,         "psu_fsm_st1",      // Bit
-       8'hF6, 16'd6,         "psu_fsm_st2",      // Bit
-       8'hF6, 16'd7,         "psu_fsm_st3",      // Bit
-       8'hF6, 16'd8,         "psu_fsm_st4",      // Bit
-       8'hF6, 16'd9,         "psu_fsm_st5",      // Bit
-       8'hF6, 16'd10,        "psu_fsm_st6",      // Bit
-       8'hF6, 16'd11,        "psu_fsm_st7",      // Bit
-       8'hF6, 16'd12,        "tick_1ms",         // Bit
-       8'hF6, 16'd13,        "tick_10ms",        // Bit
-       8'hF6, 16'd14,        "tick_100ms",       // Bit
-       8'hF6, 16'd15,        "tick_1s",          // Bit
-       8'hF6, 16'd16,        "core_mosi[0]",     // Bit
-       8'hF6, 16'd17,        "core_mosi[1]",     // Bit
-       8'hF6, 16'd18,        "core_miso[0]",     // Bit
-       8'hF6, 16'd19,        "core_miso[1]",     // Bit
-       8'hF6, 16'd20,        "trig_mosi[0]",     // Bit
-       8'hF6, 16'd21,        "trig_mosi[1]",     // Bit
-       8'hF6, 16'd22,        "trig_miso[0]",     // Bit
-       8'hF6, 16'd23,        "trig_miso[1]",     // Bit
-       8'hF6, 16'd24,        "pod_mosi[0]",      // Bit
-       8'hF6, 16'd25,        "pod_mosi[1]",      // Bit
-       8'hF6, 16'd26,        "pod_mosi[2]",      // Bit
-       8'hF6, 16'd27,        "pod_mosi[3]",      // Bit
-       8'hF6, 16'd28,        "pod_miso[0]",      // Bit
-       8'hF6, 16'd29,        "pod_miso[1]",      // Bit
-       8'hF6, 16'd30,        "pod_miso[2]",      // Bit
-       8'hF6, 16'd31,        "pod_miso[3]",      // Bit
+//   8'hF1, "hs_view_name",                      // Name for this view
+//   8'hF4, "digital_hs",                        // Signal source 
+//   8'hF5, "hs_group_name",                     // Make a top level group
+//     8'hF6, 16'd0,         "psu_fault",        // Bit
+//     8'hF6, 16'd1,         "tx_cadence",       // Bit
+//     8'hF6, 16'd2,         "tx_waveform",      // Bit
+//     8'hF6, 16'd3,         "tx_receive",       // Bit
+//     8'hF6, 16'd4,         "psu_fsm_st0",      // Bit
+//     8'hF6, 16'd5,         "psu_fsm_st1",      // Bit
+//     8'hF6, 16'd6,         "psu_fsm_st2",      // Bit
+//     8'hF6, 16'd7,         "psu_fsm_st3",      // Bit
+//     8'hF6, 16'd8,         "psu_fsm_st4",      // Bit
+//     8'hF6, 16'd9,         "psu_fsm_st5",      // Bit
+//     8'hF6, 16'd10,        "psu_fsm_st6",      // Bit
+//     8'hF6, 16'd11,        "psu_fsm_st7",      // Bit
+//     8'hF6, 16'd12,        "tick_1ms",         // Bit
+//     8'hF6, 16'd13,        "tick_10ms",        // Bit
+//     8'hF6, 16'd14,        "tick_100ms",       // Bit
+//     8'hF6, 16'd15,        "tick_1s",          // Bit
+//     8'hF6, 16'd16,        "core_mosi[0]",     // Bit
+//     8'hF6, 16'd17,        "core_mosi[1]",     // Bit
+//     8'hF6, 16'd18,        "core_miso[0]",     // Bit
+//     8'hF6, 16'd19,        "core_miso[1]",     // Bit
+//     8'hF6, 16'd20,        "trig_mosi[0]",     // Bit
+//     8'hF6, 16'd21,        "trig_mosi[1]",     // Bit
+//     8'hF6, 16'd22,        "trig_miso[0]",     // Bit
+//     8'hF6, 16'd23,        "trig_miso[1]",     // Bit
+//     8'hF6, 16'd24,        "pod_mosi[0]",      // Bit
+//     8'hF6, 16'd25,        "pod_mosi[1]",      // Bit
+//     8'hF6, 16'd26,        "pod_mosi[2]",      // Bit
+//     8'hF6, 16'd27,        "pod_mosi[3]",      // Bit
+//     8'hF6, 16'd28,        "pod_miso[0]",      // Bit
+//     8'hF6, 16'd29,        "pod_miso[1]",      // Bit
+//     8'hF6, 16'd30,        "pod_miso[2]",      // Bit
+//     8'hF6, 16'd31,        "pod_miso[3]",      // Bit
 //     8'hF5, "hs_counters_group",
 //       8'hF7, 16'd31,16'd16, "tx_delay[15:0]", // Vector
 //       8'hF7, 16'd47,16'd32, "tx_cnt[15:0]",   // Vector
 //       8'hF7, 16'd55,16'd48, "tx_index[7:0]",  // Vector
 //     8'hE5,                                    // End Group
-     8'hE5,8'hE1,                                // End Group,View
+//   8'hE5,8'hE1,                                // End Group,View
 
      8'hF1, "ls_view_name",                      // Name for this view
      8'hF5, "ls_group_name",                     // Make a top level group
@@ -761,12 +766,13 @@ sump3_core_inst
   .rec_wr_en         ( rec_wr_en               ),
   .rec_wr_addr       ( rec_wr_addr[7:0]        ),
   .rec_wr_data       ( rec_wr_data[31:0]       ),
+  .dig_triggers      ( 32'd0                   )  // Ext Triggerable digital signals
 
-  .dig_triggers      ( sump3_uut_hs[31:0]      ), // Triggerable digital signals
-  .dig_hs_bits       ( sump3_uut_hs[63:0]      ), // All digital signals
+//.dig_triggers      ( sump3_uut_hs[31:0]      ), // Triggerable digital signals
+//.dig_hs_bits       ( sump3_uut_hs[63:0]      ), // All digital signals
 
-  .user_stim         (                         ), 
-  .user_ctrl         (                         )
+//.user_stim         (                         ), 
+//.user_ctrl         (                         )
 );
 
   assign sump3_debug[7:0]   = sump3_uut_pod2[7:0];
