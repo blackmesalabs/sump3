@@ -75,6 +75,7 @@
 -- ----  --------  -------- --------------------------------------------------
 -- 0.1   02.23.23  khubbard Rev01 Creation
 -- 0.11  11.01.23  khubbard Rev01 Include example ROM bypass for old ISE-XST
+-- 0.12  02.09.24  khubbard Rev01 Deprecated Digital HS
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -85,11 +86,6 @@ module sump3_core #
    parameter ana_ram_depth_len  = 1024,
    parameter ana_ram_depth_bits = 10,
    parameter ana_ram_width      = 32, // Record width. Units of 32. Keep 32
-
-   parameter dig_hs_enable      = 0,  // If 0, must use defaults for depth,width
-   parameter dig_ram_depth_len  = 256,
-   parameter dig_ram_depth_bits = 8,
-   parameter dig_ram_width      = 32, // Must be units of 32
 
    parameter rle_hub_num        =  1,  // Number of RLE Hubs (Clock Domains)
 
@@ -135,17 +131,32 @@ module sump3_core #
   output reg  [rle_hub_num-1:0] trigger_mosi = 0,
   input  wire [rle_hub_num-1:0] trigger_miso,
 
-  input  wire [dig_ram_width-1:0] dig_hs_bits,
 
   input  wire         trigger_in, 
   output reg          trigger_out = 0,
   output reg          sump_is_armed = 0,
   output reg          sump_is_awake = 0,
-  input  wire [31:0]  dig_triggers,
-  output reg  [31:0]  user_ctrl = 0,
-  output reg  [31:0]  user_stim = 0
+  input  wire [31:0]  dig_triggers       // Used for Analog Block Only
 );
 
+
+//----------------------------------
+// Deprecated Digtal HS features
+//----------------------------------
+// parameter dig_hs_enable      = 0,  // If 0, must use defaults for depth,width
+// parameter dig_ram_depth_len  = 256,
+// parameter dig_ram_depth_bits = 8,
+// parameter dig_ram_width      = 32, // Must be units of 32
+// input  wire [dig_ram_width-1:0] dig_hs_bits,
+// output reg  [31:0]  user_ctrl = 0,
+// output reg  [31:0]  user_stim = 0
+   parameter dig_hs_enable      = 0;
+   parameter dig_ram_depth_len  = 256;
+   parameter dig_ram_depth_bits = 8;
+   parameter dig_ram_width      = 32;
+   wire [dig_ram_width-1:0] dig_hs_bits;
+   reg  [31:0] user_ctrl;
+   reg  [31:0] user_stim;
 
 // Variable Size Capture BRAM
 // Note: The ultra synthesis pragma is specific for Xilinx Ultra RAMs
