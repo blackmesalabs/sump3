@@ -76,6 +76,7 @@
 -- 0.1   02.23.23  khubbard Rev01 Creation
 -- 0.11  11.01.23  khubbard Rev01 Include example ROM bypass for old ISE-XST
 -- 0.12  02.09.24  khubbard Rev01 Deprecated Digital HS
+-- 0.13  02.13.24  khubbard Rev01 Cleanup
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -85,7 +86,7 @@ module sump3_core #
    parameter ana_ls_enable      = 0,  // If 0, must use defaults for depth,width
    parameter ana_ram_depth_len  = 1024,
    parameter ana_ram_depth_bits = 10,
-   parameter ana_ram_width      = 32, // Record width. Units of 32. Keep 32
+   parameter ana_ram_width      = 32, // Record width. Must be 32.
 
    parameter rle_hub_num        =  1,  // Number of RLE Hubs (Clock Domains)
 
@@ -178,7 +179,8 @@ module sump3_core #
   reg   [ana_ram_depth_bits-1:0] b_addr;
   reg   [ana_ram_width-1:0]      b_do;
   reg   [ana_ram_width-1:0]      b_do_p1;
-  reg   [ana_ram_width-1:0]      b_do_p2;
+//reg   [ana_ram_width-1:0]      b_do_p2;
+  reg   [31:0]                   b_do_p2;
 
   reg                            c_we;
   reg   [dig_ram_depth_bits-1:0] c_addr;
@@ -1144,7 +1146,6 @@ begin
   if ( ana_ls_enable == 1 ) begin
     b_do    <= ana_ram_array[b_addr];
     b_do_p1 <= b_do[ana_ram_width-1:0];
-    b_do_p2 <= b_do_p1[ana_ram_width-1:0];
   end
 end // always
 
@@ -1184,8 +1185,12 @@ begin
   rd_page_lb       <= rd_page_p1[9:0];
   muxd_ram_dout_p1 <= muxd_ram_dout[31:0];
   d_do_p2          <= d_do_p1[dig_ram_width-1:0];// Note the ck change
-  b_do_p2          <= b_do_p1[ana_ram_width-1:0];// Note the ck change
-  
+
+  // Stuff DWORD appropriately for 32 vs 18 bit.  Note the ck change
+  if ( ana_ram_width == 32 ) begin
+    b_do_p2 <= b_do_p1[31:0];
+  end
+
   if ( rd_page_lb[9:8] == 2'b00 ) begin 
     if ( rd_page_lb[7] == 1 && ana_ls_enable == 1 ) begin
       muxd_ram_dout <= b_do_p2[31:0];

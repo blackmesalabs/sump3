@@ -646,8 +646,8 @@ sump3_core
   .ck_freq_mhz        (  12'd80    ),
   .ck_freq_fracts     (  20'h00000 ),
 
-  .tick_freq_mhz      (  16'd0001  ),
-  .tick_freq_fracts   (  16'h0000  ),
+  .tick_freq_mhz      (  12'd001   ),
+  .tick_freq_fracts   (  20'h00000 ),
 
   .view_rom_en        (  1         ), 
   .view_rom_txt       (

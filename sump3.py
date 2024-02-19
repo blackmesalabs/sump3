@@ -72,6 +72,7 @@
 # 2024.02.06 : Fixed user_ctrl problems. Removed bulk_mask
 # 2024.02.07 : Fixed cmd_remove_view() not removing view from view_applied_list
 # 2024.02.09 : save_vcd() and load_vcd() improvements.
+# 2024.02.16 : Improve measurement text field. Fixed panning issue with ADC samples.
 #
 #
 # DONE: view filter on user_ctrl bits
@@ -183,7 +184,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.02.09";
+    self.vers = "2024.02.16";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -1110,7 +1111,8 @@ def display_text_stats( self ):
     self.text_stats = ( rts, (x1,y1), bold_i );
 
   # Display Panel is open. For the selected window, display info about it and 
-  # cursors. If any signals are selected, display info about them as well.
+  # cursors. If any signals are selected, display info about them as well but don't
+  # display the main stuff as there's limited space.
   if self.container_display_list[0].visible == True :
     delta = "\u0394";# unicode for delta triangle. I like source code in 7bit ASCII.
     indent = " ";
@@ -1125,6 +1127,11 @@ def display_text_stats( self ):
       line2 = "Cursor-2 = %d" % self.cursor_list[1].x;
     else:
       line2 = "";
+
+    if any( each.selected for each in self.signal_list ):
+      short_text = True;
+    else:
+      short_text = False;
 
     rts = [];
     min_time = 0; max_time = 0;
@@ -1146,7 +1153,8 @@ def display_text_stats( self ):
 
     (a,b) = time_rounder( min_time, "ps" );
     (c,d) = time_rounder( max_time, "ps" );
-    rts += ["View: %d%s to +%d%s" % (a,b,c,d) ];
+    if not short_text:
+      rts += ["View: %d%s to +%d%s" % (a,b,c,d) ];
 
     font_size = int( self.vars["font_size"] );
     if font_size > 20:
@@ -1180,7 +1188,8 @@ def display_text_stats( self ):
             line = " " * int(w);
             j = int( ( abs(min_time) / total_time ) * w);
             line = line[:j] + "T" + line[j+ 1:]
-            rts += ["   %s" % line ];
+            if not short_text:
+              rts += ["   %s" % line ];
 
         # Window Total and Shown positions
         #  "[   {  }    ]"
@@ -1214,8 +1223,8 @@ def display_text_stats( self ):
           if "{" not in line and "}" not in line and "|" not in line:
             line = line.replace("[ ","[{" );
             line = line.replace(" ]","}]" );
-
-          rts += ["W%d %s" % (i+1,line) ];
+          if not short_text:
+            rts += ["W%d %s" % (i+1,line) ];
 
     if self.window_selected != None:
       win_num = self.window_selected;
@@ -1225,6 +1234,15 @@ def display_text_stats( self ):
       sample_unit  = my_win.sample_unit;
       sample_period = my_win.sample_period;
       trigger_index = my_win.trigger_index;
+
+    if self.window_selected != None and not short_text:
+#     win_num = self.window_selected;
+#     my_win  = self.window_list[win_num];
+#     x_space       = my_win.x_space;
+#     samples_start_offset  = my_win.samples_start_offset;
+#     sample_unit  = my_win.sample_unit;
+#     sample_period = my_win.sample_period;
+#     trigger_index = my_win.trigger_index;
 #     if my_win.samples_viewport != None:
 #       rts += [ my_win.samples_viewport ];# ie "[  ---T-- ]"
       rts += [ ""];
@@ -1247,12 +1265,14 @@ def display_text_stats( self ):
 #     else:
 #       print(my_win.sample_period, my_win.sample_unit, my_win.samples_total, my_win.samples_shown );
 
+    if self.window_selected != None and not short_text:
       # List all the Views assigned to this window
       for (i, each_view) in enumerate( my_win.view_list ):
         if i == 0:
           rts += ["views:"];
         rts += [" "+each_view.name];
       
+    if self.window_selected != None and not short_text:
       # List all the cursors
       if trigger_index != None and x_space != 0:
         if self.cursor_list[0].visible or self.cursor_list[1].visible:
@@ -1277,7 +1297,7 @@ def display_text_stats( self ):
 #           txt = delta+"T = %0.1f %s" % ( a,b);
             txt =           "%0.1f %s" % ( a,b);
             self.cursor_list[0].delta_txt = txt;
-#           rts += [indent+delta+txt];
+            rts += [indent+delta+txt];
 #           rts += [indent+txt];
       elif x_space == 0:
         # This will happen if you collapse all the signals and the cursors are on.
@@ -1295,7 +1315,9 @@ def display_text_stats( self ):
 #             rts += [indent+delta+"T = %0.1f %s" % ( t_delta, each_sig.sample_unit )];
 #             v_delta = abs( analog_value_list[0] - analog_value_list[1] );
 #             rts += [indent+delta+"A = %0.1f %s" % ( v_delta, each_sig.units )];
+# HERE12
 
+    if self.window_selected != None :
       # Display info about selected visible signals in the selected window 
       for each_sig in self.signal_list:
         if each_sig.selected and each_sig.visible and each_sig.parent == my_win and each_sig.type != "group" :
@@ -1868,21 +1890,45 @@ def mouse_get_cursor( self ):
   # Only allow cursor drag on a selected window
   if wave_i == self.window_selected:
     margin = 5;
-    mouse_x = self.mouse_x - ( 3 * margin );
+#   mouse_x = self.mouse_x - ( 3 * margin );
+    mouse_x = self.mouse_x - ( 2 * margin );
 
-    vasili = True;
+    distance_window = 15;# +/- pels from cursor
+
+    # Of the two cursors, find the closest one to the mouse and if that one
+    # is visible and within the distance_window, select it.
+    my_cur_delta_x = None;
+    my_cur         = None;
     for each_cursor in self.cursor_list:
-      if each_cursor.visible == True:
-        if each_cursor.parent != None:
-          (x,y,w,h) = each_cursor.parent.rect;
-          cur_x = each_cursor.x;
-          if ( ( mouse_x ) > ( cur_x - 10 ) and
-               ( mouse_x ) < ( cur_x + 10 )     ):
-            if vasili:
-              each_cursor.selected = True;
-              vasili = False;# Grab a cursor, one cursor only please
-          else:
-            each_cursor.selected = False;
+      if each_cursor.visible == True and each_cursor.parent != None:
+        each_cursor.selected = False;
+        cur_x = each_cursor.x;
+        delta_x = abs( mouse_x - cur_x );
+        if my_cur == None:
+          my_cur = each_cursor;
+          my_cur_delta_x = delta_x;
+        elif delta_x < my_cur_delta_x:
+          my_cur = each_cursor;
+          my_cur_delta_x = delta_x;
+    if my_cur != None and my_cur_delta_x < distance_window:
+      my_cur.selected = True;
+
+
+#   vasili = True;
+#   for each_cursor in self.cursor_list:
+#     if each_cursor.visible == True:
+#       if each_cursor.parent != None:
+#         (x,y,w,h) = each_cursor.parent.rect;
+#         cur_x = each_cursor.x;
+#         if ( ( mouse_x ) > ( cur_x - 10 ) and
+#              ( mouse_x ) < ( cur_x + 10 )     ):
+#         if ( ( mouse_x ) > ( cur_x - distance_window ) and
+#              ( mouse_x ) < ( cur_x + distance_window )     ):
+#           if vasili:
+#             each_cursor.selected = True;
+#             vasili = False;# Grab a cursor, one cursor only please
+#         else:
+#           each_cursor.selected = False;
   return;
 
 ###############################################################################
@@ -4001,7 +4047,10 @@ def cmd_pan_left( self ):
 #   pan = pan - 1;
 #   print("sample_shown = %d " % my_win.samples_shown );
     if my_win.samples_shown != None:
-      pan = pan - int( my_win.samples_shown / 10 );
+      delta = int( my_win.samples_shown / 10 );
+      if delta == 0:
+        delta = 1;# For Analog Samples
+      pan = pan - delta;
       if pan < 0:
         pan = 0;
     my_win.zoom_pan_history += [ my_win.zoom_pan_list ];
@@ -4039,7 +4088,10 @@ def cmd_pan_right( self ):
 #   pan = pan + 1;
 #   print("sample_shown = %d " % my_win.samples_shown );
     if my_win.samples_shown != None:
-      pan = pan + int( my_win.samples_shown / 10 );
+      delta = int( my_win.samples_shown / 10 );
+      if delta == 0:
+        delta = 1;# For Analog Samples
+      pan = pan + delta;
       if pan + samples_shown > samples_total:
         pan = samples_total - samples_shown;
 
@@ -4758,6 +4810,7 @@ def log( self, txt_list ):
 # Establish connection to Sump2 hardware
 def cmd_sump_connect( self ):
   log( self, ["sump_connect()"] );
+  erase_old_sump_ram_files( self );
   rts = [];
   self.bd=Backdoor(  self.vars["bd_server_ip"],
                      int( self.vars["bd_server_socket"], 10 ) );# Note dec
@@ -4941,6 +4994,26 @@ def cmd_sump_connect( self ):
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
 
   return rts;
+
+
+def erase_old_sump_ram_files( self ):
+  log( self, ["erase_old_sump_ram_files()"] );
+  file_path = self.vars["sump_path_ram"];
+  import glob, os;
+
+  file_header = "*";
+  file_name = file_header+"*.txt";
+  file_name = os.path.join( file_path, file_name );
+
+  # Delete any existing *.txt files in sump_ram directory
+  file_list = glob.glob( file_name );
+  for each in file_list:
+    log( self,["Removing %s" % each]);
+    try:
+      os.remove( each );
+    except:
+      log( self,["ERROR: Unable to delete %s" % each]);
+  return;
 
 #def generate_view_rom_files( self ):
 def generate_view_rom_files( self, view_rom_list ):
@@ -5848,6 +5921,7 @@ def sump_read_config( self ):
 # HACK
 # a['ana_ls_enable']         = 0;
 # a['dig_hs_enable']         = 0;
+ 
 
 # a['hw_id']                 = ( hwid_data & 0xFF000000 ) >> 24;
 # a['hw_rev']                = ( hwid_data & 0x00FF0000 ) >> 16;
@@ -5861,6 +5935,10 @@ def sump_read_config( self ):
     a['ana_ram_width']         = 0;
     a['tick_freq']             = 0;
     a['tick_divisor']          = 0;
+
+# print("Oy"); 
+# print("tick_freq_data = %08x" % tick_freq_data );
+# print("tick_freq      = %f" % a['tick_freq']    );
 
   if a['dig_hs_enable'] == 1:
     a['dig_ram_depth']         = ( dig_ram_data  & 0x00FFFFFF ) >> 0;
@@ -6873,11 +6951,14 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
               bit_cnt = 0; word_val = 0;
               valid_sample = True;# An RLE masked bit will show up as "X" instead of "1" or "0"
               for j in range( bot_rip, (top_rip+1) ):
-                if each_sample[j] == "X":
-                  valid_sample = False;# This will wipe out the entire word
+                if j < len(each_sample):
+                  if each_sample[j] == "X":
+                    valid_sample = False;# This will wipe out the entire word
+                  else:
+                    word_val += (2**bit_cnt) * int( each_sample[j] );
+                  bit_cnt += 1;
                 else:
-                  word_val += (2**bit_cnt) * int( each_sample[j] );
-                bit_cnt += 1;
+                  valid_sample = False;# This will wipe out the entire word
               if valid_sample:
                 each_sig.values += [ word_val ];
                 each_sig.rle_time += [ int(each_time,10) ];
@@ -7585,8 +7666,10 @@ class sump3_hw:
         words[1] = words[1] + "." + ( "%d" % inst );
       txt = "create_view " + words[1];
       self.rom_view_name = words[1];
-    elif words[0] == "f5":
+    elif words[0] == "f5" and words[1] != None:
       txt = "create_group " + words[1];
+#   elif words[0] == "f5" and words[1] == None:
+#     txt = "end_group";# HACK!         
 
     elif words[0] == "e0":
       txt = "end_rom";
@@ -7939,13 +8022,14 @@ def init_vars( self, file_ini ):
   vars["font_size"] = "16";
   vars["file_log"]  = "sump3_log.txt";
   vars["debug_mode"                ] = "False";
-  vars["tool_tips_on_hover"        ] = "1";
+  vars["tool_tips_on_hover"        ] = "0";
   vars["screen_color_background"   ] = "000000";
   vars["screen_color_foreground"   ] = "00FF00";
   vars["screen_color_selected"     ] = "FFFF00";
   vars["screen_color_trigger"      ] = "E00000";
   vars["screen_color_triggerable"  ] = "AA5500";
   vars["screen_color_cursor"       ] = "FFFF55";
+  vars["screen_save_position"      ] = "0";
   vars["screen_x"                  ] = "20";
   vars["screen_y"                  ] = "30";
 # vars["screen_width"              ] = "800";
@@ -8024,7 +8108,7 @@ def init_vars( self, file_ini ):
   self.var_save_list = ["font_name","font_size","file_log","debug_mode","tool_tips_on_hover",
     "screen_color_background","screen_color_foreground","screen_color_selected",
     "screen_color_trigger","screen_color_triggerable","screen_color_cursor",
-    "screen_x", "screen_y",
+    "screen_x", "screen_y","screen_save_position",
     "screen_width","screen_height", "screen_windows","screen_console_height",
     "bd_connection","bd_protocol","bd_server_ip","bd_server_socket",
     "sump_script_startup","sump_script_triggered","sump_script_shutdown",
@@ -8066,9 +8150,12 @@ def init_vars( self, file_ini ):
   self.color_triggerable    = rgb2color( int(vars["screen_color_triggerable"  ],16));
   self.cursor_list[0].color = rgb2color( int(vars["screen_color_cursor"       ],16));
   self.cursor_list[1].color = rgb2color( int(vars["screen_color_cursor"       ],16));
-  screen_x = vars["screen_x"];
-  screen_y = vars["screen_y"];
-  os.environ['SDL_VIDEO_WINDOW_POS'] = "%s,%s" % (screen_x,screen_y);
+
+  # Tell SDL to place window at last saved location
+  if ( vars["screen_save_position"].lower() in ["true","yes","1"] ):
+    screen_x = vars["screen_x"];
+    screen_y = vars["screen_y"];
+    os.environ['SDL_VIDEO_WINDOW_POS'] = "%s,%s" % (screen_x,screen_y);
   return vars;
 
 
@@ -10474,9 +10561,19 @@ def assign_signal_attribute_by_name( self, new_signal, attribute, value ):
 
   # Shorthand subs
   if   attribute == "mask"            : attribute = "rle_masked";
-  if   attribute == "vis"             : attribute = "visible";
-  if   attribute == "hid"             : attribute = "hidden";
-  if   attribute == "col"             : attribute = "collapsed";
+  elif attribute == "vis"             : attribute = "visible";
+  elif attribute == "hid"             : attribute = "hidden";
+  elif attribute == "col"             : attribute = "collapsed";
+  elif attribute == "rng"             : attribute = "range";
+  elif attribute == "u"               : attribute = "units";
+  elif attribute == "upc"             : attribute = "units_per_code";
+  elif attribute == "upd"             : attribute = "units_per_division";
+  elif attribute == "dpr"             : attribute = "divisions_per_range";
+  elif attribute == "ou"              : attribute = "offset_units";
+  elif attribute == "oc"              : attribute = "offset_codes";
+  elif attribute == "trg"             : attribute = "trigger";
+  elif attribute == "tf"              : attribute = "trigger_field";
+  elif attribute == "vo"              : attribute = "vertical_offset";
 
 # if   attribute == "nickname"        : new_signal.nickname        = value;
   if   attribute == "name"            : new_signal.name            = value;
