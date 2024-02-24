@@ -73,6 +73,8 @@
 # 2024.02.07 : Fixed cmd_remove_view() not removing view from view_applied_list
 # 2024.02.09 : save_vcd() and load_vcd() improvements.
 # 2024.02.16 : Improve measurement text field. Fixed panning issue with ADC samples.
+# 2024.02.22 : Read and report View ROM sizes. Added GTKwave support w hierachy
+# 2024.02.23 : Fixed multiple VCD export bugs with hierarchy, rips and gtkw file.
 #
 #
 # DONE: view filter on user_ctrl bits
@@ -184,7 +186,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.02.16";
+    self.vers = "2024.02.23";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -2263,6 +2265,7 @@ def shutdown(self):
   log( self, ["shutdown()"] );
   if self.sump_connected:
     cmd_sump_sleep(self);
+    self.bd.close();
 
 # This doesn't work as SDL variable doesn't update after window has moved.
 # See https://python-forum.io/thread-30200.html
@@ -4820,6 +4823,7 @@ def cmd_sump_connect( self ):
     return rts;
 
   self.sump = sump3_hw( self, self.bd, int( self.vars["sump_uut_addr"],16 ) );
+  self.sump.wr( self.sump.cmd_state_idle,  0x00000000 );# In case in sleep state
   self.sump.rd_status();
   ( stat_str, status ) = self.sump.status;
   print( stat_str );
@@ -4857,6 +4861,7 @@ def cmd_sump_connect( self ):
   rts += ["ana_ram_width = %d" % ( self.sump.cfg_dict['ana_ram_width'] *32 )];
   rts += ["dig_ram_depth = %dK" % ( self.sump.cfg_dict['dig_ram_depth'] / 1024 )];
   rts += ["dig_ram_width = %d" % ( self.sump.cfg_dict['dig_ram_width'] *32 )];
+  rts += ["view_rom_kb   = %dKb" % ( self.sump.cfg_dict['view_rom_kb'] )];
 
 # New 2023.08.23
   self.vars["sump_hs_clock_freq" ] = "%f" % self.sump.cfg_dict['dig_freq'];
@@ -4872,6 +4877,7 @@ def cmd_sump_connect( self ):
     a += ["sump3_core"];
   total_latency = 0.0;
   rle_ram_total_bits = 0;
+  rle_rom_total_bits = 0;
   for (hub,each_pod_list) in enumerate( self.sump.rle_hub_pod_list ):
     pod = 0;
     self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, (hub << 16) );
@@ -4902,6 +4908,7 @@ def cmd_sump_connect( self ):
       pod_name_4_7    = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_4_7  )[0];
       pod_name_8_11   = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_8_11 )[0];
       pod_triggerable = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_triggerable )[0];
+      pod_view_rom_kb = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_view_rom_kb )[0];
 
       for i in range(0,31):
         bit = 2**i;
@@ -4913,15 +4920,38 @@ def cmd_sump_connect( self ):
       pod_name += self.sump.dword_to_ascii( pod_name_8_11 );
       pod_name = pod_name.replace(" ","");
       pod_hw_rev    = ( pod_hw_cfg & 0xFF000000 ) >> 24;
+      pod_view_rom_en = ( pod_hw_cfg & 0x00000002 ) >> 1;
       pod_num_addr_bits = ( pod_ram_cfg & 0x000000FF ) >> 0;
       pod_num_data_bits = ( pod_ram_cfg & 0x00FFFF00 ) >> 8;
       pod_num_ts_bits   = ( pod_ram_cfg & 0xFF000000 ) >> 24;
       rle_ram_length = 2**pod_num_addr_bits;
       total_bits = pod_num_data_bits+pod_num_ts_bits+2;
+      ram_kb = ( rle_ram_length * total_bits ) / 1024;
 #     ram_cfg = "%dx%d (%d+%d+%d)" % (rle_ram_length,total_bits,pod_num_data_bits,pod_num_ts_bits,2);
-      ram_cfg = "%dx%d (%d+%d+%d)" % (rle_ram_length,total_bits,2,pod_num_ts_bits,pod_num_data_bits);
-      max_time = ((2**pod_num_ts_bits)/hub_ck_freq_mhz)/1000000;  
-      a += ["  "+t+"   + Pod-%d : %s : %s : Max %0.6f Seconds" % ( pod, pod_name, ram_cfg, max_time )];
+#     ram_cfg = "%dx%d (%d+%d+%d)" % (rle_ram_length,total_bits,2,pod_num_ts_bits,pod_num_data_bits);
+      ram_cfg = "%dx%d (%d+%d+%d) = %dKb" % (rle_ram_length,total_bits,2,pod_num_ts_bits,
+        pod_num_data_bits,ram_kb);
+#     max_time = ((2**pod_num_ts_bits)/hub_ck_freq_mhz)/1000000;  
+#     a += ["  "+t+"   + Pod-%d : %s : %s : Max %0.6f Seconds" % ( pod, pod_name, ram_cfg, max_time )];
+      a += ["  "+t+"   + Pod-%d : %s : %s" % ( pod, pod_name, ram_cfg )];
+
+      max_time = ((2**pod_num_ts_bits)/hub_ck_freq_mhz)/1000000;
+      if max_time < 0.000001 :
+        max_time = max_time * 1000000000;
+        units = "nS";
+      elif max_time < 0.001 :
+        max_time = max_time * 1000000;
+        units = "uS";
+      elif max_time < 1.0   :
+        max_time = max_time * 1000;
+        units = "mS";
+      else:
+        units = "Sec";
+      a[-1] += " : Time = %d% %s" % ( max_time, units );
+
+      if pod_view_rom_en == 1 :
+        a[-1] += " : view_rom_kb = %dKb" % pod_view_rom_kb;
+        rle_rom_total_bits += pod_view_rom_kb * 1024;
       rle_ram_total_bits += ( rle_ram_length * total_bits );
 
 #     # HACK to calculate a single trigger latency based on Hub-0,Pod-0 values
@@ -4949,6 +4979,10 @@ def cmd_sump_connect( self ):
       a += ["rle_ram_bits = %d Kb" % int( rle_ram_total_bits / 1024 )];
     else:
       a += ["rle_ram_bits = %d Mb" % int( rle_ram_total_bits / (1024*1024) )];
+    if rle_rom_total_bits < (1024*1024):
+      a += ["rle_rom_bits = %d Kb" % int( rle_rom_total_bits / 1024 )];
+    else:
+      a += ["rle_rom_bits = %d Mb" % int( rle_rom_total_bits / (1024*1024) )];
 
   a += [""];
   rts += a;
@@ -5908,6 +5942,7 @@ def sump_read_config( self ):
   trig_nth        = self.sump.rd( self.sump.cmd_wr_trig_nth             )[0];
 # rle_pod_cnt     = self.sump.rd( self.sump.cmd_rd_rle_hub_config       )[0];
   trig_src_core   = self.sump.rd( self.sump.cmd_rd_trigger_src          )[0];
+  view_rom_kb     = self.sump.rd( self.sump.cmd_rd_view_rom_kb          )[0];
 
   # New 2023.11.14
   a = self.sump.cfg_dict;
@@ -5922,6 +5957,8 @@ def sump_read_config( self ):
 # a['ana_ls_enable']         = 0;
 # a['dig_hs_enable']         = 0;
  
+  if a['view_rom_en'] == 1:
+    a['view_rom_kb']         = view_rom_kb;
 
 # a['hw_id']                 = ( hwid_data & 0xFF000000 ) >> 24;
 # a['hw_rev']                = ( hwid_data & 0x00FF0000 ) >> 16;
@@ -7297,6 +7334,7 @@ class sump3_hw:
     self.cmd_rd_dig_ram_width_len    = 0x12;
     self.cmd_rd_record_profile       = 0x13;
     self.cmd_rd_trigger_src          = 0x14;
+    self.cmd_rd_view_rom_kb          = 0x15;
 
     self.cmd_wr_user_ctrl            = 0x20;
     self.cmd_wr_record_config        = 0x21;
@@ -7342,6 +7380,7 @@ class sump3_hw:
     self.rle_pod_addr_pod_user_stat   = 0x0D;# Ext user status bits           
     self.rle_pod_addr_triggerable     = 0x0E;# Triggerable Bits 0-31
     self.rle_pod_addr_pod_trigger_src = 0x0F;# Triggger Source                
+    self.rle_pod_addr_pod_view_rom_kb = 0x10;# Size of View ROM in 1kb units  
     self.rle_pod_addr_pod_instance    = 0x1C;# 0-255 Instance Number
     self.rle_pod_addr_pod_name_0_3    = 0x1D;# ASCII Name of Pod
     self.rle_pod_addr_pod_name_4_7    = 0x1E;# ASCII Name of Pod
@@ -7588,6 +7627,8 @@ class sump3_hw:
             found_rom_end = True;
             break;
         data_list += bunch_of_dwords;
+      rom_bit_cnt = ( len(data_list) * 32 ) / 1024;
+      print("ROM Size is %d Kbits" % rom_bit_cnt );
       for each_dword in data_list:
         byte_list = self.dword2bytes( each_dword );
         rts += byte_list;
@@ -8099,6 +8140,12 @@ def init_vars( self, file_ini ):
   vars["vcd_group_names"]   = "0";
 # vars["vcd_remove_rips"]   = "1";
 # vars["vcd_replace_rips"]  = "0";
+  vars["vcd_viewer_en"      ] = "1";
+  vars["vcd_viewer_gtkw_en" ] = "1";
+  vars["vcd_viewer_path"    ] = "C:\\gtkwave\\bin\\gtkwave.exe";
+  vars["vcd_viewer_width"   ] = "1900";
+  vars["vcd_viewer_height"  ] = "800";
+
 
   vars["scroll_wheel_glitch_lpf_en" ] = "1";
   vars["scroll_wheel_pan_en"        ] = "1";
@@ -8118,6 +8165,7 @@ def init_vars( self, file_ini ):
     "sump_script_remote",
     "vcd_hierarchical", "vcd_hubpod_names", "vcd_hubpod_nums","vcd_group_names", 
 #   "vcd_remove_rips", "vcd_replace_rips",
+    "vcd_viewer_en", "vcd_viewer_gtkw_en", "vcd_viewer_path","vcd_viewer_height","vcd_viewer_width",
     "list_csv_format",
     "sump_download_disable_ls", "sump_download_disable_hs", "sump_download_disable_rle",
     "sump_download_ondemand",
@@ -9977,6 +10025,8 @@ def cmd_save_list( self, words ):
       list2file( filename, lst_list );
     except:
       rts += [ "ERROR Saving %s" % filename ];
+
+
   return rts;
 
 
@@ -9988,6 +10038,7 @@ def cmd_save_vcd( self, words ):
   cmd = words[0];
   filename = words[1];
   vcd_list = None;
+  gtkw_list = [];
 
   # These options make the VCD signal names really long but preserve hierarchical names
   vcd_hierarchical = ( self.vars["vcd_hierarchical"].lower() in ["true","yes","1"] );
@@ -9996,6 +10047,9 @@ def cmd_save_vcd( self, words ):
   vcd_group_names  = ( self.vars["vcd_group_names"].lower()  in ["true","yes","1"] );
 # vcd_remove_rips  = ( self.vars["vcd_remove_rips"].lower() in ["true","yes","1"] );
 # vcd_replace_rips = ( self.vars["vcd_replace_rips"].lower() in ["true","yes","1"] );
+
+  if ( vcd_hubpod_names and vcd_hubpod_nums ):
+    vcd_hubpod_nums = False;# There can be only one
 
   vcd_remove_rips = True;
   vcd_replace_rips = False;
@@ -10044,6 +10098,7 @@ def cmd_save_vcd( self, words ):
     max_time = 0;
     for each_sig in signal_list:
       if each_sig.hidden == False and each_sig.visible == True:
+        sig_rip = "";
         # If signals are selected, only export those. Otherwise export all signals
         if each_sig.source != None and ( each_sig.selected == True or none_selected == True ) :
           if "digital_rle" in each_sig.source:
@@ -10052,6 +10107,8 @@ def cmd_save_vcd( self, words ):
             if vcd_remove_rips == True:
               words = sig_name.split('[');
               sig_name = words[0];# "foo" and "7:0]" is tossed
+              if len(words) == 2:
+                sig_rip = "[" + words[1];
 
             # Replace "[7:0]" from "foo[7:0]" with "foo_7_0"
             if vcd_replace_rips == True:
@@ -10119,10 +10176,11 @@ def cmd_save_vcd( self, words ):
                 need_pod_start = True; 
                 need_hub_start = True;
 
-              if need_hub_stop  == True:
-                signal_names_and_groups += [ ( "", 0,True ) ];# End current 
-              if need_pod_stop  == True:
-                signal_names_and_groups += [ ( "", 0,True ) ];# End current 
+              if ( vcd_hubpod_names or vcd_hubpod_nums ):
+                if need_hub_stop  == True:
+                  signal_names_and_groups += [ ( "", 0,True ) ];# End current 
+                if need_pod_stop  == True:
+                  signal_names_and_groups += [ ( "", 0,True ) ];# End current 
 
               # Close out all groups
               if need_hub_stop == True or need_pod_stop == True:
@@ -10155,6 +10213,9 @@ def cmd_save_vcd( self, words ):
                 current_group = each_sig.member_of;
 
             signal_names            += [ ( sig_name, each_sig.bits_total) ];
+#           print( sig_name, sig_rip );
+#           gtkw_list               += [   sig_name                       ];
+            gtkw_list               += [   sig_name + sig_rip             ];
             signal_names_and_groups += [ ( sig_name, each_sig.bits_total, False) ];
             sig_values = list(each_sig.values[0:-1]);
             sig_values += [ -1 ];# Make last sample X unknown
@@ -10167,8 +10228,9 @@ def cmd_save_vcd( self, words ):
       while len( group_stack ) != 0 and each_sig.member_of != current_group:
         current_group = group_stack.pop();
         signal_names_and_groups += [ ( "", 0,True ) ];# End current
-      signal_names_and_groups += [ ( "", 0,True ) ];# End current Pod
-      signal_names_and_groups += [ ( "", 0,True ) ];# End current Hub
+      if ( vcd_hubpod_names or vcd_hubpod_nums ):
+        signal_names_and_groups += [ ( "", 0,True ) ];# End current Pod
+        signal_names_and_groups += [ ( "", 0,True ) ];# End current Hub
 
     if len(time_list) == 0:
       rts = [ "ERROR No time_list" ];
@@ -10225,7 +10287,9 @@ def cmd_save_vcd( self, words ):
     # Assign a unique VCD symbol ( "AAAA" ) to each signal and make the name_map
     ch_ptr = 0;
     signal_ch_code = [];
+#   dump_list = [];
     for (sig_name,sig_width,is_group) in signal_names_and_groups:
+#     dump_list += [ "%s %s %s" % ( sig_name, sig_width, is_group ) ];
       if is_group == True:
         if sig_name == "":
           rts += [ "$upscope $end" ];
@@ -10251,6 +10315,7 @@ def cmd_save_vcd( self, words ):
           rts += [ txt ];
 #         rts += [ "$var wire %d " % sig_width +ch_code+" "+sig_name+" [%d:0] $end" % sig_width-1];
 
+#   list2file("dump2.txt", dump_list );
     rts +=  footer;
 
     # Create a list that has next RLE timestamp and index for each signal
@@ -10352,6 +10417,73 @@ def cmd_save_vcd( self, words ):
       list2file( filename, vcd_list );
     except:
       rts = [ "ERROR Saving %s" % filename ];
+
+    vcd_viewer_en      = ( self.vars["vcd_viewer_en"].lower() in ["true","yes","1"] );
+    vcd_viewer_gtkw_en = ( self.vars["vcd_viewer_gtkw_en"].lower() in ["true","yes","1"] );
+    vcd_viewer_path    = self.vars[ "vcd_viewer_path"  ];
+    vcd_viewer_width   = self.vars[ "vcd_viewer_width"  ];
+    vcd_viewer_height  = self.vars[ "vcd_viewer_height"  ];
+    if ( vcd_viewer_en == True ):
+      vcd_file = filename;
+      if not vcd_viewer_gtkw_en:
+        gtkw_file = "";
+      else:
+        (path,fnl) = os.path.split( vcd_file );
+        (fn,fext)  = os.path.splitext( fnl );
+        fn     = fn + ".gtkw";
+        gtkw_file = os.path.join( path, fn );
+        rts += generate_gtkw( self, module_name, vcd_hierarchical, vcd_file, gtkw_file, gtkw_list,
+                              vcd_viewer_width, vcd_viewer_height );
+
+      if ( os.path.exists( vcd_viewer_path ) and os.path.exists( vcd_file ) ):
+        import subprocess;
+        python_env = os.environ.copy();
+        try:
+          rts += ["( vcd_viewer_path, vcd_file ) %s %s" % ( vcd_viewer_path, vcd_file )];
+
+          # using pipe causes the process to wait until it is done communicating
+          # causing several processes coverage to be missed during the combine step
+          startupinfo = subprocess.STARTUPINFO();
+          startupinfo.dwFlags = subprocess.STARTF_USESHOWWINDOW;
+          startupinfo.wShowWindow = subprocess.SW_HIDE;
+          process = subprocess.Popen(args=[ vcd_viewer_path,
+                                             vcd_file, gtkw_file      ],
+                                             shell = True,
+                                             startupinfo=startupinfo, );
+        except:
+          rts += ["ERROR: ( vcd_viewer_path, vcd_file ) %s %s" % ( vcd_viewer_path, vcd_file )];
+  return rts;
+
+
+#####################################
+# Generate a GTKW list 
+# [*] sump3.py generated
+# [dumpfile] "./sump2_vcd/sump2_0008.vcd"
+# [savefile] "./sump2_vcd/sump2_0008.gtkw"
+# [size] 1816 920
+# TOP.foo[2:0]
+def generate_gtkw( self, module_name, hierarchical, vcd_file, gtkw_file, gtkw_list, w, h ):
+  rts = [];
+  gtkw_flist = [];
+  gtkw_flist += ["[*]"];
+  gtkw_flist += ['[dumpfile] "./%s"' % vcd_file ];
+  gtkw_flist += ['[savefile] "./%s"' % gtkw_file];
+  gtkw_flist += ["[size] %s %s" % ( w, h )];
+  for sig_name in gtkw_list:
+    # Spartan7mini.clk_80.u0_pod.u0_group_name.\clk_80.u0_pod.u0_group_name.psu_fault
+    if hierarchical:
+      b = sig_name.split(".");
+      c = len(b[-1]) + 1;
+      hier_name = sig_name[:-c];# Remove the signal short name from the full hier name
+      gtkw_flist += ["%s.%s.\\%s" % (module_name, hier_name, sig_name ) ];
+#     gtkw_flist += [   "%s.\\%s" % (             hier_name, sig_name ) ];
+    else:
+      gtkw_flist += ["%s.\\%s" % (module_name, sig_name ) ];
+#     gtkw_flist += [   "%s" % (             sig_name ) ];
+  try:
+    list2file( gtkw_file, gtkw_flist );
+  except:
+    rts = [ "ERROR Saving %s" % gtkw_file ];
   return rts;
 
 
@@ -11528,12 +11660,14 @@ def init_manual( self ):
   a+=["                                                                     "];
   a+=["5.0 Environment Variables                                            "];
   a+=[" The bd_shell environment has internal variables that may be modified"];
-  a+=[" and read. Using a variable in a script requires preciding the var   "];
+  a+=[" and read. Using a variable in a script requires preceding the var   "];
   a+=[" name with the '$' symbol. For example, bd_shell commands of:        "];
   a+=["    addr = 12345678                                                  "];
   a+=["    r $addr                                                          "];
   a+=[" Assigns a new variable called 'addr' to 0x12345678 and then reads   "];
   a+=[" the hardware memort location at that address.                       "];
+  a+=[" Variables are loaded from the sump3.ini file on startup and internal"];
+  a+=[" variables are the written back out to sump3.ini on exit.            "];
   a+=["  5.1 bd_server                                                              "];
   a+=["   bd_connection              : 'tcp' only supported connection type.        "];
   a+=["   bd_protocol                : 'poke' only supported connection protocol.   "];
@@ -11551,9 +11685,20 @@ def init_manual( self ):
   a+=["   sump_trigger_location      : trigger location. 0,25,50,75 or 100      "];
   a+=["   sump_trigger_nth           : Nth trigger to trigger on. 1 to 2^16     "];
   a+=["   sump_trigger_type          : Trigger type. or_rising, etc.            "];
+  a+=["   sump_download_ondemand     : Only downlad Pods that have views applied."];
   a+=["  5.3 Unit Under Test                                                    "];
   a+=["   uut_name                   : String name for UUT.                     "];
 # a+=["   uut_rev                    : String revision for UUT.                 "];
+  a+=["  5.4 VCD Exporting                                                      "];
+  a+=["   vcd_viewer_en              : Enables launching external VCD viewer.   "];
+  a+=["   vcd_viewer_path            : ie 'C:\\gtkwave\\bin\\gtkwave.exe'       "];
+  a+=["   vcd_viewer_gtkw_en         : Enables generation of GTKwave *.gtkw file"];
+  a+=["   vcd_viewer_width           : GTKwave width in pixels for GTKW file    "];
+  a+=["   vcd_viewer_width           : GTKwave height in pixels for GTKW file   "];
+  a+=["   vcd_hierarchical           : Enables VCD file with Hub+Pod hierarchy. "];
+  a+=["   vcd_hubpod_names           : Embed Hub+Pod names in VCD signal names. "];
+  a+=["   vcd_hubpod_nums            : Embed Hub+Pod numbers in VCD signal names."];
+  a+=["   vcd_group_names            : Embed Group names in VCD signal names."];
 
   a+=["                                                                     "];
   a+=["6.0 Software Constructs                                              "];

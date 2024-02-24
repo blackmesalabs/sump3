@@ -44,6 +44,7 @@
 --   0x12 : Read Digital Sample RAM Size
 --   0x13 : Read Acquisition Profile ( Record Configuration )
 --   0x14 : Read Trigger Source                                    
+--   0x15 : Read View ROM Size in 1Kb units                        
 --   0x20 : Load User Controls
 --   0x21 : Load Record Configuration Select
 --   0x22 : Load Tick Divisor 
@@ -76,7 +77,7 @@
 -- 0.1   02.23.23  khubbard Rev01 Creation
 -- 0.11  11.01.23  khubbard Rev01 Include example ROM bypass for old ISE-XST
 -- 0.12  02.09.24  khubbard Rev01 Deprecated Digital HS
--- 0.13  02.13.24  khubbard Rev01 Cleanup
+-- 0.13  02.22.24  khubbard Rev01 Cleanup. View ROM Size added at 0x15
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -310,6 +311,7 @@ module sump3_core #
   wire  [31:0]                   ctrl_12_status;
   wire  [31:0]                   ctrl_13_status;
   wire  [31:0]                   ctrl_14_status;
+  wire  [31:0]                   ctrl_15_status;
   wire  [7:0]                    cap_status;
   reg   [7:0]                    cap_status_lb;
   reg                            triggered_jk = 0;
@@ -594,6 +596,7 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       6'H12   : lb_rd_d  <= ctrl_12_status[31:0];
       6'H13   : lb_rd_d  <= ctrl_13_status[31:0];
       6'H14   : lb_rd_d  <= ctrl_14_status[31:0];
+      6'H15   : lb_rd_d  <= ctrl_15_status[31:0];
 
       6'H20   : lb_rd_d  <= ctrl_20_reg[31:0];
       6'H21   : lb_rd_d  <= ctrl_21_reg[31:0];
@@ -637,6 +640,7 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       6'H12   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H13   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H14   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H15   : lb_rd_rdy <= lb_rd & lb_cs_data;
 
       6'H20   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H21   : lb_rd_rdy <= lb_rd & lb_cs_data;
@@ -703,6 +707,7 @@ end // proc_lb_rd
 
   assign ctrl_13_status[31:0]  = rec_cfg_profile[31:0];// RAM record config
   assign ctrl_14_status[31:0]  = { 20'd0, trigger_src_lb[11:0] };
+  assign ctrl_15_status[31:0]  = view_rom_size / 1024;
 
   assign cap_status = { 3'd0, init_ram_jk, acquired_jk, triggered_jk, 
                         pre_trig_jk, armed_jk };

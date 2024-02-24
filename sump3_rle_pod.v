@@ -85,6 +85,7 @@
 -- 0.1   06.07.23  khubbard Rev01 Creation
 -- 0.11  11.30.23  khubbard       Added trig_bits param
 -- 0.12  02.02.24  khubbard       Timestamp rollover fix on infrequent deltas
+-- 0.13  02.22.24  khubbard       View ROM size added at 0x10
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -513,6 +514,7 @@ end
 //  0x0D  : Pod User Stat
 //  0x0E  : Triggerable Bits D[31:0]
 //  0x0F  : Trigger Source   D[31:0]
+//  0x10  : Viem ROM Size in 1Kb units
 //  0x1C  : RO Pod Instance 0-255 ( for Pods of same ASCII name, else keep 0 )
 //  0x1D  : RO Pod Name 0-3 in ASCII
 //  0x1E  : RO Pod Name 4-7 in ASCII
@@ -568,6 +570,7 @@ always @ ( posedge clk_cap ) begin
       8'h0d : lb_rd_d <= pod_user_stat[31:0];
       8'h0e : lb_rd_d <= triggerable_bits[31:0];// Which bits are triggerable
       8'h0f : lb_rd_d <= trigger_src[31:0];
+      8'h10 : lb_rd_d <= view_rom_size / 1024;
       8'h1c : lb_rd_d <= pod_instance;
       8'h1d : lb_rd_d <= pod_ascii_name[96:65];
       8'h1e : lb_rd_d <= pod_ascii_name[64:33];
