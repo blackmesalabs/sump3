@@ -75,6 +75,10 @@
 # 2024.02.16 : Improve measurement text field. Fixed panning issue with ADC samples.
 # 2024.02.22 : Read and report View ROM sizes. Added GTKwave support w hierachy
 # 2024.02.23 : Fixed multiple VCD export bugs with hierarchy, rips and gtkw file.
+# 2024.02.27 : Fixed save_vcd() crashing due to RLE masked signals with no samples
+# 2024.02.28 : Fixed acquire loop never stopping after trigger.
+# 2024.02.29 : Fixed RLE time wrap issue on zero activity pre-trigger in rle_time_cull()
+# 2024.03.01 : Added some attribute shortcuts for smaller ROM sizes.
 #
 #
 # DONE: view filter on user_ctrl bits
@@ -186,7 +190,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.02.23";
+    self.vers = "2024.03.01";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -902,18 +906,24 @@ class main:
     log( self, ["  screen_x = 123"]                                        );
     log( self, ["  screen_y = 456"]                                        );
     log( self, ["run()"] );
+    spinner = "|";
     while self.running:
       # check for input
       self.process_events()
       self.ui_manager.update( time_delta = 0 );
-   
       if self.mode_acquire and self.sump_connected:
+        spinner = rotate_spinner( spinner );
+        self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Waiting for trigger " + spinner);
         self.sump.rd_status();
         ( stat_str, status ) = self.sump.status;
         log( self, ["mode_acquire status is %s" % stat_str ] );
         if stat_str == "acquired":
           self.mode_acquire = False;
           pygame.time.wait(1000);# time in mS. 
+          cmd_sump_download( self );
+        elif stat_str == "triggered":
+          pygame.time.wait( self.max_pod_acq_time_ms );
+          self.mode_acquire = False;
           cmd_sump_download( self );
         else:
           pygame.time.wait(1000);# time in mS. 
@@ -966,6 +976,15 @@ class main:
 
       if self.mode_acquire:
         pygame.time.wait(750);# Limit the polling rate
+
+
+# Rotate a little spinner for acquire loop waiting for trigger
+def rotate_spinner( spinner ):
+  if   spinner == "|": spinner = "/";
+  elif spinner == "/": spinner = "-";
+  elif spinner == "-": spinner = "\\";
+  else               : spinner = "|";
+  return spinner;
 
 
 ###############################################################################
@@ -4622,6 +4641,16 @@ def cmd_file_dialog( self, name, path, ext ):
   test_file.show();
   return;
 
+
+########################################################
+def cmd_gui_refresh( self, words ):
+  log( self, ["gui_refresh()"] );
+  rts = [];
+  self.refresh_waveforms = True;
+  self.refresh_sig_names = True;
+  self.refresh_cursors = True;
+  return rts;
+
 ########################################################
 def cmd_gui_minimize( self, words ):
   log( self, ["gui_minimize()"] );
@@ -4878,6 +4907,7 @@ def cmd_sump_connect( self ):
   total_latency = 0.0;
   rle_ram_total_bits = 0;
   rle_rom_total_bits = 0;
+  self.max_pod_acq_time_ms = 0;
   for (hub,each_pod_list) in enumerate( self.sump.rle_hub_pod_list ):
     pod = 0;
     self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, (hub << 16) );
@@ -4936,6 +4966,8 @@ def cmd_sump_connect( self ):
       a += ["  "+t+"   + Pod-%d : %s : %s" % ( pod, pod_name, ram_cfg )];
 
       max_time = ((2**pod_num_ts_bits)/hub_ck_freq_mhz)/1000000;
+      if ( max_time * 1000  ) > self.max_pod_acq_time_ms:
+        self.max_pod_acq_time_ms = int( max_time * 1000);# used for acquire wait from trig to download
       if max_time < 0.000001 :
         max_time = max_time * 1000000000;
         units = "nS";
@@ -4947,7 +4979,7 @@ def cmd_sump_connect( self ):
         units = "mS";
       else:
         units = "Sec";
-      a[-1] += " : Time = %d% %s" % ( max_time, units );
+      a[-1] += " : Time = %d %s" % ( max_time, units );
 
       if pod_view_rom_en == 1 :
         a[-1] += " : view_rom_kb = %dKb" % pod_view_rom_kb;
@@ -5757,8 +5789,12 @@ def download_rle_ondemand_all( self ):
   filename  = os.path.join( file_path, filename );
   rle_ram_list = file2list( filename );
   rle_ram_updated = False;
+  spinner = "|";
   for (i,each_pod_list) in enumerate( self.sump.rle_hub_pod_list ):
     for (j,each_pod) in enumerate( each_pod_list ):
+      txt = "(%d,%d) " % ( i,j );
+      spinner = rotate_spinner( spinner );
+      self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Downloading "+txt+spinner);
       log( self,[ "RLE Hub,Pod List : %d,%d %s" % ( i,j,each_pod) ]);
       new_rle_ram_list = sump_rlepod_download(self, hub_num=i, pod_num=j,
                                                rle_ram_list=rle_ram_list );
@@ -5775,8 +5811,7 @@ def download_rle_ondemand_all( self ):
     log( self,[ "Updating %s" % file_out ]);
     create_sump_digital_rle(self,  file_in, file_out );
 
-# self.pygame.display.set_caption(\
-#   self.name+" "+self.vers+" "+self.copyright+" Populating user signals..");
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright);
   populate_signal_values_from_samples( self );
   return;
 
@@ -6404,6 +6439,7 @@ def rle_time_cull(self, rle_list ):
           new_post_trig += [ each ];
         else:
           start_culling = True;
+        previous_sample_time = sample_time;
 #   if start_culling:
 #     log( self,["WARNING: Culled invalid RLE samples in rle_time_cull()"]);
 
@@ -6418,6 +6454,7 @@ def rle_time_cull(self, rle_list ):
           new_pre_trig += [ each ];
         else:
           start_culling = True;
+        previous_sample_time = sample_time;
 #   if start_culling:
 #     log( self,["WARNING: Culled invalid RLE samples in rle_time_cull()"]);
     old_len = len( rle_list );
@@ -8024,6 +8061,7 @@ def init_globals( self ):
   self.signal_delete_list = [];# Stack of signals deleted for <DEL>,<INS>,<HOME>
   self.signal_copy_list = [];# Stack of signals copied 
   self.time_lock = False;
+  self.max_pod_acq_time_ms = 0; # used for acquire wait from trig to download
 
 
   # Map the display name to the variable names. Note that these are not in the 
@@ -8541,6 +8579,13 @@ def signal_attribute_inheritance( self, my_sig ):
             my_sig.view_obj  = each_group.view_obj;
           if each_group.timezone != None:
             my_sig.timezone = each_group.timezone;
+          if each_group.rle_masked == True:
+            my_sig.rle_masked = each_group.rle_masked;
+          if each_group.hidden     == True:
+            my_sig.hidden     = each_group.hidden;
+          if each_group.visible    == False:
+            my_sig.visible    = each_group.visible;
+
           if len( each_group.user_ctrl_list ) != 0:
             print("1", my_sig.name );
 #           my_sig.user_ctrl_list += each_group.user_ctrl_list;
@@ -9885,7 +9930,10 @@ def cmd_save_list( self, words ):
     min_time = 0;
     max_time = 0;
     for each_sig in signal_list:
-      if each_sig.hidden == False and each_sig.visible == True:
+#     if each_sig.hidden == False and each_sig.visible == True:
+#     if each_sig.hidden == False and each_sig.visible == True and each_sig.values != None and len( each_sig.values ) != 0:
+# Note : It's important to make VCDs from signals not visible as they may be in collapsed groups
+      if each_sig.values != None and len( each_sig.values ) != 0:
         if each_sig.source != None and ( each_sig.selected == True or none_selected == True ) :
           if "digital_rle" in each_sig.source:
             sig_name = each_sig.name;
@@ -10033,6 +10081,9 @@ def cmd_save_list( self, words ):
 #####################################
 # Convert RLE dataset to Verilog VCD
 def cmd_save_vcd( self, words ):
+  if not self.has_focus:
+    print("I don't have focus. I shouldn't be here. I don't belong.");
+    return ["No Focus"];
   rts = [];
   rts += ["save_vcd()"];
   cmd = words[0];
@@ -10097,7 +10148,10 @@ def cmd_save_vcd( self, words ):
     min_time = 0;
     max_time = 0;
     for each_sig in signal_list:
-      if each_sig.hidden == False and each_sig.visible == True:
+#     if each_sig.hidden == False and each_sig.visible == True:
+#     if each_sig.hidden == False and each_sig.visible == True and each_sig.values != None and len( each_sig.values ) != 0:
+# Note : It's important to make VCDs from signals not visible as they may be in collapsed groups
+      if each_sig.values != None and len( each_sig.values ) != 0:
         sig_rip = "";
         # If signals are selected, only export those. Otherwise export all signals
         if each_sig.source != None and ( each_sig.selected == True or none_selected == True ) :
@@ -10223,6 +10277,7 @@ def cmd_save_vcd( self, words ):
             this_signal_samples = list(zip( sig_values, each_sig.rle_time ));
             signal_samples += [ this_signal_samples ];
             time_list      += each_sig.rle_time;
+
 
     if vcd_hierarchical == True:
       while len( group_stack ) != 0 and each_sig.member_of != current_group:
@@ -10436,22 +10491,26 @@ def cmd_save_vcd( self, words ):
                               vcd_viewer_width, vcd_viewer_height );
 
       if ( os.path.exists( vcd_viewer_path ) and os.path.exists( vcd_file ) ):
-        import subprocess;
-        python_env = os.environ.copy();
+#       python_env = os.environ.copy();
         try:
           rts += ["( vcd_viewer_path, vcd_file ) %s %s" % ( vcd_viewer_path, vcd_file )];
 
-          # using pipe causes the process to wait until it is done communicating
-          # causing several processes coverage to be missed during the combine step
-          startupinfo = subprocess.STARTUPINFO();
-          startupinfo.dwFlags = subprocess.STARTF_USESHOWWINDOW;
-          startupinfo.wShowWindow = subprocess.SW_HIDE;
-          process = subprocess.Popen(args=[ vcd_viewer_path,
-                                             vcd_file, gtkw_file      ],
-                                             shell = True,
-                                             startupinfo=startupinfo, );
+# This had issues with not terminating the PyGame-GUI event and looping forever
+# launching GTKwave over and over and over again.
+#         # using pipe causes the process to wait until it is done communicating
+#         # causing several processes coverage to be missed during the combine step
+#         import subprocess;
+#         startupinfo = subprocess.STARTUPINFO();
+#         startupinfo.dwFlags = subprocess.STARTF_USESHOWWINDOW;
+#         startupinfo.wShowWindow = subprocess.SW_HIDE;
+#         process = subprocess.Popen(args=[ vcd_viewer_path,
+#                                            vcd_file, gtkw_file      ],
+#                                            shell = True,
+#                                            startupinfo=startupinfo, );
+          os.system("%s %s %s" % ( vcd_viewer_path, vcd_file, gtkw_file ));
         except:
           rts += ["ERROR: ( vcd_viewer_path, vcd_file ) %s %s" % ( vcd_viewer_path, vcd_file )];
+  print("3");
   return rts;
 
 
@@ -10693,8 +10752,11 @@ def assign_signal_attribute_by_name( self, new_signal, attribute, value ):
 
   # Shorthand subs
   if   attribute == "mask"            : attribute = "rle_masked";
+  elif attribute == "m"               : attribute = "rle_masked";
   elif attribute == "vis"             : attribute = "visible";
+  elif attribute == "v"               : attribute = "visible";
   elif attribute == "hid"             : attribute = "hidden";
+  elif attribute == "h"               : attribute = "hidden";
   elif attribute == "col"             : attribute = "collapsed";
   elif attribute == "rng"             : attribute = "range";
   elif attribute == "u"               : attribute = "units";
@@ -11390,7 +11452,8 @@ def proc_cmd( self, cmd ):
 # self.cmd_console.add_output_line_to_log( cmd ,is_bold=True, remove_line_break=True);
   valid = False;
   rts = [];
-  if   cmd_txt == "quit" or cmd_txt == "die" or cmd_txt == "hastalavista" : cmd_txt = "exit";
+  if   cmd_txt == "refresh"           : cmd_txt = "gui_refresh";
+  if   cmd_txt == "quit" or cmd_txt == "die" : cmd_txt = "exit";
   if   cmd_txt == "exit"              : shutdown(self); valid = True; sys.exit();
   elif cmd_txt == "source"            : rts = cmd_source(self, words ); valid = True;
   elif cmd_txt == "cd"                : rts = cmd_unix(self, words ); valid = True;
@@ -11425,6 +11488,7 @@ def proc_cmd( self, cmd ):
   elif cmd_txt == "load_vcd"          : rts = cmd_load_vcd(self,words); valid = True;
   elif cmd_txt == "save_vcd"          : rts = cmd_save_vcd( self, words ); valid = True;
   elif cmd_txt == "gui_minimize"      : rts = cmd_gui_minimize(self,words); valid = True;
+  elif cmd_txt == "gui_refresh"       : rts = cmd_gui_refresh(self,words); valid = True;
 # elif cmd_txt == "gui_fullscreen"    : rts = cmd_gui_fullscreen(self,words); valid = True;
   elif cmd_txt == "r"                 : rts = cmd_read(self, words ); valid = True;
   elif cmd_txt == "w"                 : rts = cmd_write(self, words ); valid = True;

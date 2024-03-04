@@ -86,6 +86,7 @@
 -- 0.11  11.30.23  khubbard       Added trig_bits param
 -- 0.12  02.02.24  khubbard       Timestamp rollover fix on infrequent deltas
 -- 0.13  02.22.24  khubbard       View ROM size added at 0x10
+-- 0.14  02.22.28  khubbard       Fixed rle timestamp rollover bug
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -802,7 +803,8 @@ always @ ( posedge clk_cap ) begin
         if ( ( events_p1 != events_p2[rle_data_bits-1:0] ) ||
              ( init_jk == 0 && init_jk_p1 == 1           ) ||
              // Storing MSB flipping tells SW timestamp has rolled
-             ( rle_time[rle_ram_depth_bits-1] != rle_time_p1[rle_ram_depth_bits-1] ) ||  
+//           ( rle_time[rle_ram_depth_bits-1] != rle_time_p1[rle_ram_depth_bits-1] ) ||  
+             ( rle_time[rle_timestamp_bits-1] != rle_time_p1[rle_timestamp_bits-1] ) ||  
              ( rle_disable == 1                          )    ) begin
           rle_wr_en    <= 1;// Store deltas and also a T=0 sample
           rle_wr_addr  <= rle_wr_addr + 1;
