@@ -83,6 +83,11 @@
 # 2024.03.05 : Fixed issue with text zoom/pan indicator on really long captures
 # 2024.03.06 : Added clone_signal(). Fixed bug of cursor delta stuck when signal selected
 # 2024.03.07 : Replaced clone_signal() with cut_signal() as more intuitive.
+# 2024.03.15 : Fixed save_view() missing view name. Fixed cursor grab also selecting signal.
+# 2024.03.19 : Fixed rd_core_view_rom() to not loop past length of ROM if end not found.
+# 2024.03.22 : More PyGame bar updates on RLE downloads.
+# 2024.03.26 : Fixed cmd_save_view() to include "end_group" for nested groups.
+# 2024.03.28 : Fixed identify_invalid_signals() incorrectly culling digital_rle signals.
 #
 # DONE: view filter on user_ctrl bits
 # DONE: Offline mode. Should always come up and display last capture data
@@ -193,7 +198,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.03.07";
+    self.vers = "2024.03.28";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -351,13 +356,13 @@ class main:
       if event.type == pygame.MOUSEBUTTONDOWN:
         if event.button == 1 : 
           self.mouse_btn1_dn = pygame.mouse.get_pos();# (x,y)
-          mouse_get_cursor(self);# Grab any cursor near the mouse pointer
-          mouse_get_text(self);# Select any adjustable text fields at mouse
-          rts = mouse_event_single_click(self);# Select any signal name at mouse
-#DRAG
-          if rts:
-            ( self.mouse_signal_drag_from_window, null ) = mouse_get_zone( self );
-            self.refresh_waveforms = True;
+          rts = mouse_get_cursor(self);# Grab any cursor near the mouse pointer
+          if not rts:
+            mouse_get_text(self);# Select any adjustable text fields at mouse
+            rts = mouse_event_single_click(self);# Select any signal name at mouse
+            if rts:
+              ( self.mouse_signal_drag_from_window, null ) = mouse_get_zone( self );
+              self.refresh_waveforms = True;
         elif event.button == 2 : 
 #         print("Button2");
           self.mouse_btn2_dn  = pygame.mouse.get_pos();# (x,y)
@@ -1933,13 +1938,12 @@ def recursive_signal_collapse( self, parent ):
 def mouse_get_cursor( self ):
   (self.mouse_x,self.mouse_y) = pygame.mouse.get_pos();
   (wave_i, zone_i ) = mouse_get_zone( self );
+  rts = False;# Did not grab a cursor
 
   # Only allow cursor drag on a selected window
   if wave_i == self.window_selected:
     margin = 5;
-#   mouse_x = self.mouse_x - ( 3 * margin );
     mouse_x = self.mouse_x - ( 2 * margin );
-
     distance_window = 15;# +/- pels from cursor
 
     # Of the two cursors, find the closest one to the mouse and if that one
@@ -1959,24 +1963,8 @@ def mouse_get_cursor( self ):
           my_cur_delta_x = delta_x;
     if my_cur != None and my_cur_delta_x < distance_window:
       my_cur.selected = True;
-
-
-#   vasili = True;
-#   for each_cursor in self.cursor_list:
-#     if each_cursor.visible == True:
-#       if each_cursor.parent != None:
-#         (x,y,w,h) = each_cursor.parent.rect;
-#         cur_x = each_cursor.x;
-#         if ( ( mouse_x ) > ( cur_x - 10 ) and
-#              ( mouse_x ) < ( cur_x + 10 )     ):
-#         if ( ( mouse_x ) > ( cur_x - distance_window ) and
-#              ( mouse_x ) < ( cur_x + distance_window )     ):
-#           if vasili:
-#             each_cursor.selected = True;
-#             vasili = False;# Grab a cursor, one cursor only please
-#         else:
-#           each_cursor.selected = False;
-  return;
+      rts = True;
+  return rts;
 
 ###############################################################################
 # On button-1 drag, move a cursors that are in a selected state
@@ -5886,6 +5874,7 @@ def cmd_sump_download( self ):
 
   self.status_downloading = False;
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   log( self, ["sump_download() : Completed.\n"] );
   return;
 
@@ -5904,6 +5893,9 @@ def download_rle_ondemand( self, rle_sig_source ):
   return;
 
 def download_rle_ondemand_hubpod( self, hub, pod ):
+  self.pygame.display.set_caption(\
+    self.name+" "+self.vers+" "+self.copyright+" download_rle_ondemand_hubpod()..");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   filename = "sump_rle_ram.txt";
   from os import path;
   file_path = os.path.abspath( self.vars["sump_path_ram"] );
@@ -5927,6 +5919,8 @@ def download_rle_ondemand_hubpod( self, hub, pod ):
 #   self.pygame.display.set_caption(\
 #     self.name+" "+self.vers+" "+self.copyright+" Populating user signals..");
     populate_signal_values_from_samples( self );
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+"");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   return;
 
 # Called by cmd_save_pza()
@@ -5941,10 +5935,11 @@ def download_rle_ondemand_all( self ):
   spinner = "|";
   for (i,each_pod_list) in enumerate( self.sump.rle_hub_pod_list ):
     for (j,each_pod) in enumerate( each_pod_list ):
+      log( self,[ "RLE Hub,Pod List : %d,%d %s" % ( i,j,each_pod) ]);
       txt = "(%d,%d) " % ( i,j );
       spinner = rotate_spinner( spinner );
       self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Downloading "+txt+spinner);
-      log( self,[ "RLE Hub,Pod List : %d,%d %s" % ( i,j,each_pod) ]);
+      self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
       new_rle_ram_list = sump_rlepod_download(self, hub_num=i, pod_num=j,
                                                rle_ram_list=rle_ram_list );
       if new_rle_ram_list != None:
@@ -5961,6 +5956,7 @@ def download_rle_ondemand_all( self ):
     create_sump_digital_rle(self,  file_in, file_out );
 
   self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright);
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   populate_signal_values_from_samples( self );
   return;
 
@@ -5973,6 +5969,9 @@ def download_rle_ondemand_all( self ):
 #   3) whenever a Pizza is loaded
 def populate_signal_values_from_samples( self ):
   log( self,["populate_signal_values()"]);
+  self.pygame.display.set_caption(\
+    self.name+" "+self.vers+" "+self.copyright+" populate_signal_values_from_samples()...");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   f1 = "sump_ls_samples.txt";
   f2 = "sump_hs_samples.txt";
   f3 = "sump_rle_samples.txt";
@@ -5986,6 +5985,8 @@ def populate_signal_values_from_samples( self ):
     inherit_sample_timing(self);
     identify_invalid_signals( self );
     self.refresh_waveforms = True;
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright);
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   return;
 
 
@@ -6000,19 +6001,21 @@ def populate_signal_values_from_samples( self ):
 def identify_invalid_signals( self ):
   log( self,["identify_invalid_signals()"]);
   for each_sig in self.signal_list:
-    sump_user_ctrl = self.sump.cfg_dict["user_ctrl"];
-    match_jk = True;
-    for each_user_ctrl in each_sig.user_ctrl_list:
-      (rip_str, hex_val) = each_user_ctrl;
-      hex_int = int(hex_val,16);
-      # Given "[7:4]" return ( 0x000000F0, 0xFFFFFF0F, 4 )
-      (a,b,c) = gen_bit_rip( rip_str );
-      sump_user_ctrl_masked = a & sump_user_ctrl;
-      if ( sump_user_ctrl_masked != hex_int << c ):
-        match_jk = False; # print("no match!");
-    if not match_jk:
-#     each_sig.hidden  = True;
-      log( self,["Keeping invalid %s not hidden (just for now)" % each_sig.name]);
+    if each_sig.source != None:
+      if "digital_rle" not in each_sig.source:
+        sump_user_ctrl = self.sump.cfg_dict["user_ctrl"];
+        match_jk = True;
+        for each_user_ctrl in each_sig.user_ctrl_list:
+          (rip_str, hex_val) = each_user_ctrl;
+          hex_int = int(hex_val,16);
+          # Given "[7:4]" return ( 0x000000F0, 0xFFFFFF0F, 4 )
+          (a,b,c) = gen_bit_rip( rip_str );
+          sump_user_ctrl_masked = a & sump_user_ctrl;
+          if ( sump_user_ctrl_masked != hex_int << c ):
+            match_jk = False; # print("no match!");
+        if not match_jk:
+          each_sig.hidden  = True;
+#         log( self,["Keeping invalid %s not hidden (just for now)" % each_sig.name]);
   return;
 
 
@@ -6143,6 +6146,8 @@ def sump_read_config( self ):
  
   if a['view_rom_en'] == 1:
     a['view_rom_kb']         = view_rom_kb;
+  else:
+    a['view_rom_kb']         = 0;
 
 # a['hw_id']                 = ( hwid_data & 0xFF000000 ) >> 24;
 # a['hw_rev']                = ( hwid_data & 0x00FF0000 ) >> 16;
@@ -6276,6 +6281,9 @@ def sump_rlepod_placeholder( self, hub_num, pod_num ):
 # If it isn't needed, return None
 def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
   log( self,["sump_rlepod_download()"]);
+  self.pygame.display.set_caption(\
+    self.name+" "+self.vers+" "+self.copyright+" sump_rlepod_download()");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   need_to_download = False;
   hub_i = None;
   pod_i = None;
@@ -6290,7 +6298,7 @@ def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
       if hub_i == hub_num and pod_i == pod_num:
         need_to_download = True;
         insert_line = i;
-        log( self,["downloaded_needed for (%d,%d)" % ( hub_num,pod_num) ]);
+        log( self,["download_needed for (%d,%d)" % ( hub_num,pod_num) ]);
     if words[0] == "#[rle_pod_stop]":
       hub_i = None;
       pod_i = None;
@@ -6393,22 +6401,24 @@ def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
       self.pygame.display.set_caption(\
         self.name+" "+self.vers+" "+self.copyright+" Downloading RLE Hub-%d Pod-%d Page-%d of %d" \
            % ( hub_num,pod_num,j,(num_dwords-1) ) );
+      self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
 
       # Set the Page to read out RLE samples, timestamps and 2bit codes
       print("sump_rlepod_download() : Hub = %d : Pod = %d : Page %d :  RAM Length = %d " % \
         ( hub_num, pod_num, j, rle_ram_length ) );
       self.sump.wr_pod( hub=hub_num,pod=pod_num,
                         reg=self.sump.rle_pod_addr_ram_page_ptr, data=((j<<20)+0x0000) );
-      pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
+      self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
       dword_list = self.sump.rd_pod(hub=hub_num,pod=pod_num,
                                     reg=self.sump.rle_pod_addr_ram_data,num_dwords=rle_ram_length);
-      pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
+#     self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
 #     print("len(dword_list) = %d " % len( dword_list ) );
 #     if ( hub_num == 0 and pod_num == 0 ):
 #       list2file( ("j%d.txt"%(j)) , ["%08x" % each for each in dword_list ] );
       list_of_lists += [ dword_list ];
 
     self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright );
+    self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
 
     # Now reorder so that the DWORDs from each RAM address are together
     # Only store the hex nibbles that have info
@@ -6643,6 +6653,8 @@ def rle_time_cull(self, rle_list ):
 #
 def create_sump_digital_rle( self, file_in, file_out ):
   log( self,["create_sump_digital_rle()"]);
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" create_sump_digital_rle()");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   from os import path;
   file_path = os.path.abspath( self.vars["sump_path_ram"] );
   file_in   = os.path.join( file_path, file_in );
@@ -6684,6 +6696,8 @@ def create_sump_digital_rle( self, file_in, file_out ):
   # trig_lat_miso_ck = 12         # 12 clocks at 100 MHz is the latency
   # trig_src_hub     = 300        # Indicates Hub num 0x00 was the trig source
   # trig_src_pod     = 00000001   # Indicated D[0] was the trigger bit
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" locating trigger...");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   trig_src_miso_latency = 0.0;# in ps
   for each in ram_list:
     # Look for and store header data
@@ -6715,8 +6729,9 @@ def create_sump_digital_rle( self, file_in, file_out ):
 #       pod_user_ctrl = int( words[2], 16 );
 
   # 2nd pass passes header info on through other than parsing the 
-  # pod number. Data is modifed to subtract trigger time from 
-  # all samples
+  # pod number. Data is modifed to subtract trigger time from all samples
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" time adjust..");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   calc_trig_offset = True;
   trig_offset = 0;
   for each in ram_list:
@@ -6795,6 +6810,8 @@ def create_sump_digital_rle( self, file_in, file_out ):
       # X1X01100000001001000000000000000 2 0
       # X0X11100000001001000000000000000 3 12500
   list2file( file_out, lst_list );
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+"");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   return;
 
 
@@ -6976,6 +6993,8 @@ def create_sump_digital_slow( self, file_in, file_out ):
 #def create_signal_values_digital( self, file_ls_name, file_hs_name ):
 def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_name ):
   log( self,["create_signal_values_digital()"]);
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" create_signal_values_digital()");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   from os import path;
   file_path = os.path.abspath( self.vars["sump_path_ram"] );
   file_ls_name  = os.path.join( file_path, file_ls_name  );
@@ -6986,6 +7005,8 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
   hs_list = [];
   rle_list = [];
   
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" create_signal_values_digital() Reading Files...");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   if os.path.exists( file_ls_name ):
     ls_list = file2list( file_ls_name );
   if os.path.exists( file_hs_name ):
@@ -7003,12 +7024,17 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
       if words[-2] == "2":
         actual_digital_ls_trig_index = i;
 
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" create_signal_values_digital() Generating Samples...");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
 
   # Iterate through the signal list and assign samples and attributes
   # to each signal from the specified source ( ls, hs or rle )
 # total_bits = 32; 
   pod_cache = {};
-  for each_sig in self.signal_list:
+  j = len( self.signal_list );
+  for (i,each_sig) in enumerate( self.signal_list ):
+    self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" %d of %d" % (i,j));
+    self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
     if each_sig.source != None:
       # Erase old stuff - new 2023.06.29
       each_sig.values = [];
@@ -7061,6 +7087,8 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
         if pod_cache.get(( hub_num,pod_num )):
           (sample_list,attrib_dict) = pod_cache[(hub_num,pod_num)];
         else:
+          self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" pod_cache miss");
+          self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
           sample_list = [];
           parsing_jk = False;
           hub_i = None;
@@ -7088,6 +7116,8 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
             elif parsing_jk:
               sample_list += [ each_sample ];
           pod_cache[(hub_num,pod_num)] = (sample_list,attrib_dict);
+          self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" pod_cache filled");
+          self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
 
         # Decide if samples for this signal are valid based on pod_user_ctrl
         if attrib_dict.get("pod_user_ctrl") != None:
@@ -7288,6 +7318,8 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
 #     log_str +=["%s -type %s samples = %d " % \
 #               ( each_sig.name, each_sig.type, len( each_sig.values ))];
       log( self, log_str );
+  self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright);
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   return;
 
 
@@ -7800,9 +7832,11 @@ class sump3_hw:
     rts = [];
     print("Core View ROM Contents");
     data_list = [];
+    view_rom_kb = self.rd( self.cmd_rd_view_rom_kb )[0];
     self.wr( self.cmd_wr_ram_rd_page, 0x200 );# ROM
     self.wr( self.cmd_wr_ram_rd_ptr,  0x0000 );
     data_list = self.rd( self.cmd_rd_ram_data, num_dwords=1);
+    k = 0;
     if ( ( data_list[0] & 0x000000FF ) == self.vrbyte_rom_end ):
       found_rom_end = False;
       while not found_rom_end:
@@ -7813,7 +7847,14 @@ class sump3_hw:
             bunch_of_dwords = bunch_of_dwords[0:i+2];
             found_rom_end = True;
             break;
+#       for each in bunch_of_dwords:
+#         print("%d : %08x" % (k, each) );
+#         k +=1;
         data_list += bunch_of_dwords;
+        # Don't loop beyond the actual size of the ROM - Abort.
+        if len( data_list ) > ( 32* view_rom_kb ) :
+          print("WARNING: No View ROM END Found. Maybe your ROM is sized wrong?");
+          return rts;
       rom_bit_cnt = ( len(data_list) * 32 ) / 1024;
       print("ROM Size is %d Kbits" % rom_bit_cnt );
       for each_dword in data_list:
@@ -8265,7 +8306,7 @@ def init_vars( self, file_ini ):
 # vars["screen_height_small"       ] = "600";
   vars["screen_width"              ] = "1024";
   vars["screen_height"             ] = "720";
-  vars["screen_height_small"       ] = "700";
+  vars["screen_height_small"       ] = "600";
 # vars["screen_windows"            ] = "F";# 4 bits for which windows are visible
   vars["screen_windows"            ] = "9";# 4 bits for visible windows. 9 = Win1 + bd_shell
   vars["screen_console_height"     ] = "300";# bd_shell console height
@@ -10825,8 +10866,8 @@ def cmd_save_view( self, words ):
   import os;
   print("save_view()", words );
   rts = [];
+  rts += [ "save_view()" ];
   view_name = words[1];
-  # view_name = "saved_view";
   if view_name == None:
     filename_path = self.vars["sump_path_view"];
     filename_base = os.path.join( filename_path, "view_" );
@@ -10845,59 +10886,90 @@ def cmd_save_view( self, words ):
     win_num = self.window_selected;
   txt_list = [];
   
-# txt_list += ["create_view %s" % view_name];
-  # If the view name was specified - use it, else assume based on filename later.
-  if words[1] != None:
-    txt_list += ["create_view %s" % view_name];
-  else:
-    txt_list += ["create_view"];
+  txt_list += ["create_view %s" % view_name];
 
+  group_stack = [];
 
   # Note: This attempts to save a view file in an order format that a human might write one.
   signal_list = self.window_list[win_num].signal_list;
   for each_sig in signal_list:
-    if True:
-      txt = "create_signal %s " % each_sig.name;
-      if each_sig.source != None:
-        txt += "-source %s " % each_sig.source;
-      if each_sig.type != "digital" and each_sig.type != "analog":
-        txt += "-type %s " % each_sig.type;# -type group, etc
+    print( each_sig.name, each_sig.type );
+    # If there is a group open, close it if the next item isn't a member of it
+    if len(group_stack) != 0:
+      if each_sig.member_of != group_stack[-1]:
+        txt_list += [ "end_group" ];
+        del group_stack[-1];
+        print("end_group")
 
-      # Don't bother saving attributes that have default values like visible, color, etc
-      if each_sig.visible == False:
-        txt += "-visible %s " % each_sig.visible;
-      fg_color = color_lookup(self.vars["screen_color_foreground"]);
-      if each_sig.color != fg_color:
-        txt += "-color %06x " % each_sig.color;
+    if each_sig.type == "group":
+      group_stack += [ each_sig ];
+      print("Pushing")
 
-      if each_sig.source != None:
-        txt += "-triggerable %s " % each_sig.triggerable;
-        if "digital_rle" not in each_sig.source:
-          txt += "-trigger_field %08x " % each_sig.trigger_field;
+#     # Determine if we're pushing down a group level or closing the previous group
+#     close_group = True;
+#     1yyif each_sig.member_of != None:
+#       # Push down to a new hiearachy level?
+#       if len( group_stack ) != 0:
+#         if each_sig.member_of == group_stack[-1]:
+#           group_stack += [ each_sig ];
+#           close_group = False;
+#         else:
+#           txt_list += [ "end_group" ];
+#           del group_stack[-1];
+#           close_group = False;
+#     else:
+#       group_stack += [ each_sig ];
+#
+#     if close_group and len(group_stack) != 0:
+#       txt_list += [ "end_group" ];
+#       del group_stack[-1];
 
-      if each_sig.source != None:
-        if "analog" in each_sig.source:
-          txt += "-vertical_offset %s " % each_sig.vertical_offset;
-          txt += "-units_per_division %s " % each_sig.units_per_division;
-          txt += "-divisions_per_range %s " % each_sig.divisions_per_range;
-          txt += "-range %s " % each_sig.range;
-          txt += "-units %s " % each_sig.units;
-          txt += "-offset_units %s " % each_sig.offset_units;
-          txt += "-units_per_code %s " % each_sig.units_per_code;
-        else:
-          if each_sig.rle_masked == True:
-            txt += "-rle_masked %s " % each_sig.rle_masked;
+    txt = "create_signal %s " % each_sig.name;
+    if each_sig.source != None:
+      txt += "-source %s " % each_sig.source;
+    if each_sig.type != "digital" and each_sig.type != "analog":
+      txt += "-type %s " % each_sig.type;# -type group, etc
 
-      if each_sig.member_of != None:
-        if each_sig.member_of.name != None:
-          txt += "-group %s " % each_sig.member_of.name;
+    # Don't bother saving attributes that have default values like visible, color, etc
+    if each_sig.visible == False:
+      txt += "-visible %s " % each_sig.visible;
+    fg_color = color_lookup(self.vars["screen_color_foreground"]);
+    if each_sig.color != fg_color:
+      txt += "-color %06x " % each_sig.color;
+
+    if each_sig.source != None:
+      txt += "-triggerable %s " % each_sig.triggerable;
+      if "digital_rle" not in each_sig.source:
+        txt += "-trigger_field %08x " % each_sig.trigger_field;
+
+    if each_sig.source != None:
+      if "analog" in each_sig.source:
+        txt += "-vertical_offset %s " % each_sig.vertical_offset;
+        txt += "-units_per_division %s " % each_sig.units_per_division;
+        txt += "-divisions_per_range %s " % each_sig.divisions_per_range;
+        txt += "-range %s " % each_sig.range;
+        txt += "-units %s " % each_sig.units;
+        txt += "-offset_units %s " % each_sig.offset_units;
+        txt += "-units_per_code %s " % each_sig.units_per_code;
+      else:
+        if each_sig.rle_masked == True:
+          txt += "-rle_masked %s " % each_sig.rle_masked;
+
+    if each_sig.member_of != None:
+      if each_sig.member_of.name != None:
+        txt += "-group %s " % each_sig.member_of.name;
 
 
 #     txt += "-format " % each_sig.format;
 #     txt += "-timezone " % each_sig.timezone;
 #     txt += "-window %s " % each_sig.window;
 #     txt += "-parent %s " % each_sig.parent;
-      txt_list += [ txt ];
+    txt_list += [ txt ];
+
+  while len( group_stack ) != 0:
+    txt_list += [ "end_group" ];
+    del group_stack[-1];
+
   txt_list += ["end_view"];
   txt_list += ["add_view"];
 # txt_list += ["add_view %s" % view_name];
@@ -10909,13 +10981,13 @@ def cmd_save_view( self, words ):
       os.mkdir(filename_path);
     except:
       log(self,["ERROR: unable to mkdir %s" % filename_path]);
-  rts = [ "Saving %s" % filename ];
+  rts += [ "Saving %s" % filename ];
   try:
     list2file( filename, txt_list );
     ( file_path, file_no_path ) = os.path.split( filename );
     cmd_add_view_ontap(self, ["add_view_ontap", file_no_path ] );
   except:
-    rts = [ "ERROR Saving %s" % filename ];
+    rts += [ "ERROR Saving %s" % filename ];
   return rts;
 
 

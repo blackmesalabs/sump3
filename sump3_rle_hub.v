@@ -43,6 +43,7 @@
 -- 0.1   07.18.23  khubbard Rev01 Creation
 -- 0.11  11.20.23  khubbard Rev01 Trigger source added at 0x34
 -- 0.12  01.05.24  khubbard Rev01 Fixed 1st trigger being missed.
+-- 0.13  03.27.24  khubbard Rev01 Critical Path Timing opt in rd_sr mux.
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -86,6 +87,7 @@ module sump3_rle_hub #
   reg   [5:0]                    rle_pod_rd_cnt = 6'd0;
   reg                            rle_pod_rd_bit = 0;
   reg   [31:0]                   rle_pod_rd_sr = 32'd0;
+  reg   [31:0]                   rle_pod_rd_sr_pre = 32'd0;
   reg                            queue_pre_read_jk = 0;
 
   reg                            bus_wr_clr = 0;
@@ -143,6 +145,7 @@ module sump3_rle_hub #
   reg                            trigger_mosi_p1   = 0;
   reg                            trigger_mosi_p2   = 0;
   reg                            rd_rdy_pre = 0;
+  reg                            rd_rdy_pre_pre = 0;
   reg                            rd_rdy_clr_meta = 0;
   reg                            rd_rdy_clr = 0; 
   reg                            rd_rdy_clr_loc = 0;
@@ -165,6 +168,7 @@ module sump3_rle_hub #
   wire [7:0]                     reg_32_rle_pod_reg_addr;
   wire [3:0]                     reg_35_trig_width;
   reg  [9:0]                     trig_src_byte = 10'd0; // MSBs are valid bits
+  reg  [9:0]                     trig_src_byte_p1 = 10'd0; 
   reg                            trig_src_clr  = 0;    
 
   reg  [43:0]                    rle_pod_wr_sr = 44'd0;
@@ -601,9 +605,11 @@ end
 // When an RLE Pod sends a readback startbit, shift 32 bits then stop.
 //-----------------------------------------------------------------------------
 always @ ( posedge clk_cap ) begin
-  rd_rdy_pre      <= 0;
-  rd_rdy_clr_meta <= rd_rdy_clr;
-  rd_rdy_clr_loc  <= rd_rdy_clr_meta;
+  trig_src_byte_p1 <= trig_src_byte[9:0];
+  rd_rdy_pre       <= 0;
+  rd_rdy_pre_pre   <= 0;
+  rd_rdy_clr_meta  <= rd_rdy_clr;
+  rd_rdy_clr_loc   <= rd_rdy_clr_meta;
   if ( rle_pod_rd_cnt == 6'd0 ) begin
     if ( pod_miso_p2 == 1 ) begin
       rle_pod_rd_cnt <= 6'd32;
@@ -616,37 +622,43 @@ always @ ( posedge clk_cap ) begin
     end
   end
 
+  // Timing closure optimization
+  if ( rd_rdy_pre_pre == 1 ) begin
+    rd_rdy_pre    <= 1;
+    rle_pod_rd_sr <= rle_pod_rd_sr_pre[31:0];
+  end
+
   // The Controller also reports some static info back to Sump3 Core that
   // only the controller knows. Reads must be ready immediately so send
   // this data whenever cmd_reg_cap[5:0] is updated.
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h31 ) begin
-    rd_rdy_pre    <= 1;
-    rle_pod_rd_sr <= rle_pod_num;
+    rd_rdy_pre_pre     <= 1;
+    rle_pod_rd_sr_pre  <= rle_pod_num;
   end
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h34 ) begin
-    rd_rdy_pre           <= 1;
-    rle_pod_rd_sr[31:0]  <= { 22'd0, trig_src_byte[9:0] };
+    rd_rdy_pre_pre           <= 1;
+    rle_pod_rd_sr_pre[31:0]  <= { 22'd0, trig_src_byte_p1[9:0] };
   end
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h36 ) begin
-    rd_rdy_pre           <= 1;
-    rle_pod_rd_sr[31:20] <= ck_freq_mhz;
-    rle_pod_rd_sr[19:0]  <= ck_freq_fracts;
+    rd_rdy_pre_pre           <= 1;
+    rle_pod_rd_sr_pre[31:20] <= ck_freq_mhz;
+    rle_pod_rd_sr_pre[19:0]  <= ck_freq_fracts;
   end
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3c ) begin
-    rd_rdy_pre    <= 1;
-    rle_pod_rd_sr <= hub_instance;
+    rd_rdy_pre_pre    <= 1;
+    rle_pod_rd_sr_pre <= hub_instance;
   end
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3d ) begin
-    rd_rdy_pre    <= 1;
-    rle_pod_rd_sr <= hub_ascii_name[96:65];
+    rd_rdy_pre_pre    <= 1;
+    rle_pod_rd_sr_pre <= hub_ascii_name[96:65];
   end
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3e ) begin
-    rd_rdy_pre    <= 1;
-    rle_pod_rd_sr <= hub_ascii_name[64:33];
+    rd_rdy_pre_pre    <= 1;
+    rle_pod_rd_sr_pre <= hub_ascii_name[64:33];
   end
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3f ) begin
-    rd_rdy_pre    <= 1;
-    rle_pod_rd_sr <= hub_ascii_name[32:1];// ASCII in Verilog is odd
+    rd_rdy_pre_pre    <= 1;
+    rle_pod_rd_sr_pre <= hub_ascii_name[32:1];// ASCII in Verilog is odd
   end
   
   if ( rd_rdy_pre == 1 ) begin

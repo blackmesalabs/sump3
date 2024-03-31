@@ -86,7 +86,8 @@
 -- 0.11  11.30.23  khubbard       Added trig_bits param
 -- 0.12  02.02.24  khubbard       Timestamp rollover fix on infrequent deltas
 -- 0.13  02.22.24  khubbard       View ROM size added at 0x10
--- 0.14  02.22.28  khubbard       Fixed rle timestamp rollover bug
+-- 0.14  02.22.24  khubbard       Fixed rle timestamp rollover bug
+-- 0.15  03.28.24  khubbard       Timing opt for rle_bit_cnt[5:0]
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -213,6 +214,8 @@ module sump3_rle_pod #
   reg                            rle_rxd_p3 = 0;
   reg  [3:0]                     rle_header_sr = 4'd0;
   reg  [5:0]                     rle_bit_cnt = 6'd0;
+  reg  [5:0]                     rle_bit_cnt_p1 = 6'd0;
+  reg                            rle_3bit = 0;
   reg  [3:0]                     rle_header_q = 4'd0;
   reg  [39:0]                    rle_payload_sr = 40'd0;
 
@@ -315,6 +318,8 @@ end
 always @ ( posedge clk_cap ) begin
   rle_header_sr  <= { rle_header_sr[2:0], rle_rxd_p3 };
   rle_payload_sr <= { rle_payload_sr[38:0], rle_rxd_p3 };
+  rle_bit_cnt_p1 <= rle_bit_cnt[5:0];
+  rle_3bit       <= 0;
 
   if ( rle_bit_cnt == 6'd0 ) begin
     if ( rle_header_sr[3] == 1 ) begin
@@ -324,6 +329,7 @@ always @ ( posedge clk_cap ) begin
         rle_bit_cnt <= 6'd11;// Read 8b Addr ( Return 32b Data )
       end else begin
         rle_bit_cnt <= 6'd3;// Prevents old bits from becoming new SB
+        rle_3bit    <= 1;
       end
       rle_header_q <= rle_header_sr[3:0];
     end 
@@ -345,23 +351,27 @@ always @ ( posedge clk_cap ) begin
   cfg_init    <= 0;
 
   // Idle      
-  if          ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1000 ) begin
+//if          ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1000 ) begin
+  if          ( rle_3bit == 1       && rle_header_q == 4'b1000 ) begin
     cfg_idle_jk <= 1;
     cfg_arm_jk  <= 0;
 
   // Init
-  end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1001 ) begin
+//end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1001 ) begin
+  end else if ( rle_3bit    == 1    && rle_header_q == 4'b1001 ) begin
     cfg_idle_jk <= 0;
     cfg_init    <= 1;
     cfg_arm_jk  <= 0;
 
   // Arm
-  end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1010 ) begin
+//end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1010 ) begin
+  end else if ( rle_3bit    == 1    && rle_header_q == 4'b1010 ) begin
     cfg_idle_jk <= 0;
     cfg_arm_jk  <= 1;
 
   // Trigger
-  end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1011 ) begin
+//end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1011 ) begin
+  end else if ( rle_3bit    == 1    && rle_header_q == 4'b1011 ) begin
     cfg_trigger <= 1;
   end
 end
@@ -374,12 +384,14 @@ always @ ( posedge clk_cap ) begin
   lb_wr   <= 0;
   lb_rd   <= 0;
   // Write 32b
-  if ( rle_bit_cnt == 6'd4 && rle_header_q == 4'b1101 ) begin
+//if ( rle_bit_cnt == 6'd4 && rle_header_q == 4'b1101 ) begin
+  if ( rle_bit_cnt_p1 == 6'd5 && rle_header_q == 4'b1101 ) begin
     lb_wr   <= 1;
     lb_addr <= rle_payload_sr[39:32];
     lb_wr_d <= rle_payload_sr[31:0];
   // Read 32b
-  end else if ( rle_bit_cnt == 6'd4 && rle_header_q == 4'b1100 ) begin
+//end else if ( rle_bit_cnt == 6'd4 && rle_header_q == 4'b1100 ) begin
+  end else if ( rle_bit_cnt_p1 == 6'd5 && rle_header_q == 4'b1100 ) begin
     lb_rd   <= 1;
     lb_addr <= rle_payload_sr[7:0];
   end
@@ -804,7 +816,7 @@ always @ ( posedge clk_cap ) begin
              ( init_jk == 0 && init_jk_p1 == 1           ) ||
              // Storing MSB flipping tells SW timestamp has rolled
 //           ( rle_time[rle_ram_depth_bits-1] != rle_time_p1[rle_ram_depth_bits-1] ) ||  
-             ( rle_time[rle_timestamp_bits-1] != rle_time_p1[rle_timestamp_bits-1] ) ||  
+             ( rle_time[rle_timestamp_bits-1] != rle_time_p1[rle_timestamp_bits-1] ) ||
              ( rle_disable == 1                          )    ) begin
           rle_wr_en    <= 1;// Store deltas and also a T=0 sample
           rle_wr_addr  <= rle_wr_addr + 1;
