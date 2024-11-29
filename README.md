@@ -4,9 +4,11 @@ SUMP3 an open-source logic analyzer for FPGAs. Unique in that it uses RLE hardwa
 File List:
   sump3.py     : The Python PyGame-GUI software for setting triggers and downloading and viewing waveforms.
 
-  sump3_core.v : Verilog IP for an FPGA ( or ASIC ) compact and scalable Logic Analyzer. This is the top level interface to a 32bit virtual PCIe local bus.
+  top.v           : An example design for Digilent BASYS3 Artix7 board with MesaBus over FTDI UART interface and Sump3 instance with two RLE pods for capturing a 32bit counter.
 
-  sump3_example.v : An example design.
+  sump3_top.v     : An example Sump3 instance with ViewRom example.
+
+  sump3_core.v : Verilog IP for an FPGA ( or ASIC ) compact and scalable Logic Analyzer. This is the top level interface to a 32bit virtual PCIe local bus.
 
   sump3_rle_hub.v : Hub controller that is a clock domain interface between the
     single sump3_core.v block and 1-255 sump3_rle_pod.v instances.
