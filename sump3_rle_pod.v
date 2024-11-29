@@ -88,6 +88,10 @@
 -- 0.13  02.22.24  khubbard       View ROM size added at 0x10
 -- 0.14  02.22.24  khubbard       Fixed rle timestamp rollover bug
 -- 0.15  03.28.24  khubbard       Timing opt for rle_bit_cnt[5:0]
+-- 0.16  04.29.24  khubbard       Timing opt for rle_header_q[3:0]
+-- 0.17  10.30.24  khubbard       Deprecated pod_user_stim, _stat 
+-- 0.17  10.31.24  khubbard       Expanded ctrl_0_reg to add all params
+-- 0.18  11.05.24  khubbard       Params for norom_view_ dwords,bytes,bits
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -100,6 +104,16 @@ module sump3_rle_pod #
   parameter rle_hw_revision      =  8'h01,
   parameter pod_disable          =  0,// Remove RAM+gates,remain on trigger team
   parameter rle_disable          =  0,// Disable RLE for Fmax. Removes XOR chain
+  parameter pod_user_ctrl_en     =  1,// Disabling features will shrink design
+//parameter pod_user_stim_en     =  1,// but software won't know they are gone.
+  parameter pod_user_mask_en     =  0,
+  parameter pod_name_en          =  1,
+  parameter norom_view_dwords    =  0,// If no ROM used, display all events in
+  parameter norom_view_words     =  0,// If no ROM used, display all events in
+  parameter norom_view_bytes     =  0,// this Pod as dwords, bytes or bits.  
+  parameter norom_view_bits      =  0,// 
+  parameter trigger_comp_en      =  1,
+  parameter trigger_en           =  1,// Removing trigs will make faster design
   parameter view_rom_en          =  0,// Define signal names in a ROM 
   parameter view_rom_size        =  16384,// Number of bits in ROM
   parameter view_rom_txt         =  {""},
@@ -127,10 +141,10 @@ module sump3_rle_pod #
   output reg                      pod_miso,
 // What follows are optional and may be left floating
   output wire [31:0]              pod_user_ctrl,
-  output wire [31:0]              pod_user_stim,
-  input  wire [31:0]              pod_user_stat,
+//output wire [31:0]              pod_user_stim,
+//input  wire [31:0]              pod_user_stat,
   output wire                     pod_user_trig,
-  output wire                     pod_user_mask,
+  output wire [31:0]              pod_user_mask,
   output wire                     pod_user_pretrig,
   output wire                     pod_is_armed
 );
@@ -239,7 +253,7 @@ module sump3_rle_pod #
   reg   [31:0]                   ctrl_7_reg = 32'h00000000;
   reg   [31:0]                   ctrl_a_reg = 32'h00000000;
   reg   [31:0]                   ctrl_b_reg = 32'h00000000;
-  reg   [31:0]                   ctrl_c_reg = 32'h00000000;
+//reg   [31:0]                   ctrl_c_reg = 32'h00000000;
 
   reg   [31:0]                   lb_rd_d = 32'd0;
   reg   [32:0]                   lb_rd_sr = 33'd0;
@@ -254,14 +268,13 @@ module sump3_rle_pod #
 
   reg   [32:0]                   trigger_src = 33'd0;
   wire  [31:0]                   rle_bit_mask_l;
-//wire  [31:0]                   rle_bulk_mask_l;
   wire  [31:0]                   trigger_bits;
   wire  [3:0]                    trigger_type;
   wire  [3:0]                    trigger_pos;
   wire  [31:0]                   trigger_comp;
 
-  assign pod_ascii_name   = pod_name;
-  assign triggerable_bits = trig_bits;
+  assign pod_ascii_name   = ( pod_name_en == 1 ) ? pod_name : 96'd0;
+  assign triggerable_bits = ( trigger_en == 1 ) ? trig_bits : 32'd0;
 
   assign zeros = 64'h0000000000000000;
   assign ones  = 64'hFFFFFFFFFFFFFFFF;
@@ -272,8 +285,14 @@ module sump3_rle_pod #
 // Function halt_synthesis doesn't exist so instantiating will halt synthesis
 //-----------------------------------------------------------------------------
 generate
-  if ((rle_code_bits+rle_data_bits+rle_timestamp_bits) != rle_ram_width ) begin
-    halt_synthesis_rle_pod_bad_ram_width();
+  if ( rle_disable == 0 ) begin
+    if ((rle_code_bits+rle_data_bits+rle_timestamp_bits) != rle_ram_width ) begin
+      halt_synthesis_rle_pod_bad_ram_width();
+    end
+  end else begin
+    if ((rle_code_bits+rle_data_bits+rle_timestamp_bits) != rle_ram_width ) begin
+      halt_synthesis_rle_pod_bad_ram_width();
+    end
   end
 
   if ( rle_disable == 1 ) begin
@@ -352,26 +371,26 @@ always @ ( posedge clk_cap ) begin
 
   // Idle      
 //if          ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1000 ) begin
-  if          ( rle_3bit == 1       && rle_header_q == 4'b1000 ) begin
+  if          ( rle_3bit == 1       && rle_header_q[2:0] == 3'b000 ) begin
     cfg_idle_jk <= 1;
     cfg_arm_jk  <= 0;
 
   // Init
 //end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1001 ) begin
-  end else if ( rle_3bit    == 1    && rle_header_q == 4'b1001 ) begin
+  end else if ( rle_3bit    == 1    && rle_header_q[2:0] == 3'b001 ) begin
     cfg_idle_jk <= 0;
     cfg_init    <= 1;
     cfg_arm_jk  <= 0;
 
   // Arm
 //end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1010 ) begin
-  end else if ( rle_3bit    == 1    && rle_header_q == 4'b1010 ) begin
+  end else if ( rle_3bit    == 1    && rle_header_q[2:0] == 3'b010 ) begin
     cfg_idle_jk <= 0;
     cfg_arm_jk  <= 1;
 
   // Trigger
 //end else if ( rle_bit_cnt == 6'd3 && rle_header_q == 4'b1011 ) begin
-  end else if ( rle_3bit    == 1    && rle_header_q == 4'b1011 ) begin
+  end else if ( rle_3bit    == 1    && rle_header_q[2:0] == 3'b011 ) begin
     cfg_trigger <= 1;
   end
 end
@@ -385,13 +404,13 @@ always @ ( posedge clk_cap ) begin
   lb_rd   <= 0;
   // Write 32b
 //if ( rle_bit_cnt == 6'd4 && rle_header_q == 4'b1101 ) begin
-  if ( rle_bit_cnt_p1 == 6'd5 && rle_header_q == 4'b1101 ) begin
+  if ( rle_bit_cnt_p1 == 6'd5 && rle_header_q[2:0] == 3'b101 ) begin
     lb_wr   <= 1;
     lb_addr <= rle_payload_sr[39:32];
     lb_wr_d <= rle_payload_sr[31:0];
   // Read 32b
 //end else if ( rle_bit_cnt == 6'd4 && rle_header_q == 4'b1100 ) begin
-  end else if ( rle_bit_cnt_p1 == 6'd5 && rle_header_q == 4'b1100 ) begin
+  end else if ( rle_bit_cnt_p1 == 6'd5 && rle_header_q[2:0] == 3'b100 ) begin
     lb_rd   <= 1;
     lb_addr <= rle_payload_sr[7:0];
   end
@@ -438,25 +457,6 @@ always @ ( posedge clk_cap ) begin
   end else begin
     events_p1[rle_data_bits-1:0 ] <= events_loc & rle_bit_mask_l[rle_data_bits-1:0];
   end
-
-
-  // bulk mask for bits above the base 32 bits. Setting dword to 0xFFFFFFFF
-  // will shut off everybody above 32 no matter what.
-//if ( rle_data_bits > 32 ) begin
-//  v = ( rle_data_bits - 32) / 32;// How many RLE bits get masked per "bulk" mask bit.
-//  for ( t = 0; t <= 31; t=t+1 ) begin
-//    if ( rle_bulk_mask_l[t] == 0 ) begin
-//      for ( u = 0; u <= (v-1); u=u+1 ) begin
-//        events_p1[(t*v)+u+32] <= 0;
-//      end
-//    end 
-//  end
-//  if ( rle_bulk_mask_l[31:0] == 32'h00000000 ) begin
-//    for ( w = 32; w <= (rle_data_bits-1); w=w+1 ) begin
-//      events_p1[w] <= 0;
-//    end
-//  end
-//end
 
   events_p2 <= events_p1[rle_data_bits-1:0];
 
@@ -523,8 +523,8 @@ end
 //         D[23:8]  : Data bits
 //         D[31:24] : RLE timestamp bits
 //  0x0B  : Pod User Ctrl
-//  0x0C  : Pod User Stim
-//  0x0D  : Pod User Stat
+////0x0C  : Pod User Stim
+////0x0D  : Pod User Stat
 //  0x0E  : Triggerable Bits D[31:0]
 //  0x0F  : Trigger Source   D[31:0]
 //  0x10  : Viem ROM Size in 1Kb units
@@ -544,7 +544,8 @@ always @ ( posedge clk_cap ) begin
 //    8'h06 : ctrl_6_reg <= lb_wr_d[31:0];
       8'h07 : ctrl_7_reg <= lb_wr_d[31:0];
       8'h0B : ctrl_b_reg <= lb_wr_d[31:0];
-      8'h0C : ctrl_c_reg <= lb_wr_d[31:0];
+//    8'h0C : ctrl_c_reg <= lb_wr_d[31:0];
+      default :; // NOP
     endcase
   end
   if ( pod_disable == 1 ) begin
@@ -553,8 +554,22 @@ always @ ( posedge clk_cap ) begin
 //  ctrl_6_reg <= 32'd0;
     ctrl_7_reg <= 32'd0;
     ctrl_b_reg <= 32'd0;
-    ctrl_c_reg <= 32'd0;
+//  ctrl_c_reg <= 32'd0;
   end
+
+  // Pod can be made slightly smaller by disabling these features
+  if ( pod_user_mask_en == 0 ) begin
+    ctrl_5_reg <= 32'd0;
+  end
+  if ( trigger_comp_en == 0 ) begin
+    ctrl_7_reg <= 32'd0;
+  end
+  if ( pod_user_ctrl_en == 0 ) begin
+    ctrl_b_reg <= 32'd0;
+  end
+//if ( pod_user_stim_en == 0 ) begin
+//  ctrl_c_reg <= 32'd0;
+//end
 
   if ( lb_wr == 1 && lb_addr[7:0] == 8'h08 ) begin
     if ( view_rom_en == 1 && pod_disable == 0 ) begin
@@ -579,8 +594,8 @@ always @ ( posedge clk_cap ) begin
       8'h07 : lb_rd_d <= ctrl_7_reg[31:0];
       8'h0a : lb_rd_d <= ctrl_a_reg[31:0];
       8'h0b : lb_rd_d <= ctrl_b_reg[31:0];
-      8'h0c : lb_rd_d <= ctrl_c_reg[31:0];
-      8'h0d : lb_rd_d <= pod_user_stat[31:0];
+//    8'h0c : lb_rd_d <= ctrl_c_reg[31:0];
+//    8'h0d : lb_rd_d <= pod_user_stat[31:0];
       8'h0e : lb_rd_d <= triggerable_bits[31:0];// Which bits are triggerable
       8'h0f : lb_rd_d <= trigger_src[31:0];
       8'h10 : lb_rd_d <= view_rom_size / 1024;
@@ -588,6 +603,7 @@ always @ ( posedge clk_cap ) begin
       8'h1d : lb_rd_d <= pod_ascii_name[96:65];
       8'h1e : lb_rd_d <= pod_ascii_name[64:33];
       8'h1f : lb_rd_d <= pod_ascii_name[32:1];
+      default :; // NOP
     endcase
   end
 
@@ -603,6 +619,7 @@ always @ ( posedge clk_cap ) begin
       8'h1d : lb_rd_d <= pod_ascii_name[96:65];
       8'h1e : lb_rd_d <= pod_ascii_name[64:33];
       8'h1f : lb_rd_d <= pod_ascii_name[32:1];
+      default :; // NOP
     endcase
   end
 
@@ -633,7 +650,17 @@ always @ ( posedge clk_cap ) begin
   end
 
   ctrl_0_reg[31:24] <= rle_hw_revision;
-  ctrl_0_reg[23:2 ] <= 0;
+  ctrl_0_reg[23:12] <= 0;
+  ctrl_0_reg[11]    <= norom_view_dwords;
+  ctrl_0_reg[10]    <= norom_view_words;
+  ctrl_0_reg[9]     <= norom_view_bytes;
+  ctrl_0_reg[8]     <= norom_view_bits;
+  ctrl_0_reg[7]     <= trigger_comp_en;
+  ctrl_0_reg[6]     <= trigger_en;
+  ctrl_0_reg[5]     <= ~ pod_name_en;
+  ctrl_0_reg[4]     <= pod_user_mask_en;
+  ctrl_0_reg[3]     <= pod_user_ctrl_en;
+  ctrl_0_reg[2]     <= rle_disable;
   ctrl_0_reg[1]     <= view_rom_en & ~pod_disable;
   ctrl_0_reg[0]     <= ~pod_disable;
 
@@ -651,13 +678,12 @@ always @ ( posedge clk_cap ) begin
   end
 end
   assign rle_bit_mask_l    = ~ ctrl_5_reg[31:0];// Note Mask become enables
-//assign rle_bulk_mask_l   = ~ ctrl_6_reg[31:0];
   assign trigger_bits      =   ctrl_4_reg[31:0] & triggerable_bits[31:0];
   assign trigger_type      =   ctrl_3_reg[3:0];
   assign trigger_pos       =   ctrl_3_reg[7:4];
   assign trigger_comp      =   ctrl_7_reg[31:0];
   assign pod_user_ctrl     =   ctrl_b_reg[31:0];
-  assign pod_user_stim     =   ctrl_c_reg[31:0];
+//assign pod_user_stim     =   ctrl_c_reg[31:0];
   assign pod_user_mask     =   ctrl_5_reg[31:0];
 
 
@@ -690,7 +716,7 @@ always @ ( posedge clk_cap ) begin
   end
 
   if ( armed_jk == 1 && triggered_jk == 0 ) begin
-    if ( trigger_type == 4'd1 ) begin
+    if ( trigger_type == 4'd1 && trigger_comp_en == 1 ) begin
       if ( events_trig == trigger_comp[31:0] ) begin
         rle_trigger     <= 1;// Pattern Match
       end
@@ -718,6 +744,13 @@ always @ ( posedge clk_cap ) begin
     end
   end
 
+  // Optimize away all trigger logic. Only sump3_core can trigger
+  // Exception for AND and Compare trigger since it waits for ALL pods
+  if ( trigger_en == 0 ) begin
+    rle_trigger <= 0;
+    events_trig <= 32'd0;
+  end
+
   // For AND and Compare trigger, always assert if trigger_bits == 0x00000000
   // or if this pod is disabled. The RLE Hub looks for all triggers to be 1.
   if ( armed_jk == 1 && triggered_jk == 0 ) begin
@@ -740,6 +773,7 @@ always @ ( posedge clk_cap ) begin
   if ( sump_is_armed_p1 == 1 && sump_is_armed_p2 == 0 ) begin
     trigger_src[32] <= 0;
   end
+
 end
 
 
@@ -815,7 +849,6 @@ always @ ( posedge clk_cap ) begin
         if ( ( events_p1 != events_p2[rle_data_bits-1:0] ) ||
              ( init_jk == 0 && init_jk_p1 == 1           ) ||
              // Storing MSB flipping tells SW timestamp has rolled
-//           ( rle_time[rle_ram_depth_bits-1] != rle_time_p1[rle_ram_depth_bits-1] ) ||  
              ( rle_time[rle_timestamp_bits-1] != rle_time_p1[rle_timestamp_bits-1] ) ||
              ( rle_disable == 1                          )    ) begin
           rle_wr_en    <= 1;// Store deltas and also a T=0 sample

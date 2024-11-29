@@ -1,7 +1,7 @@
 /* ****************************************************************************
--- (C) Copyright 2023 Kevin M. Hubbard - All rights reserved.
+-- (C) Copyright 2024 Kevin M. Hubbard - All rights reserved.
 -- Source file: sump3_core.v
--- Date:        February 2023
+-- Date:        October 2024
 -- Author:      khubbard
 -- Description: SUMP3 "Mixed Signal" is a fork of sump2 idea for capturing slow
 --              analog signals to a single block RAM. It does not use RLE
@@ -45,6 +45,7 @@
 --   0x13 : Read Acquisition Profile ( Record Configuration )
 --   0x14 : Read Trigger Source                                    
 --   0x15 : Read View ROM Size in 1Kb units                        
+--// 0x16 : Read User Status
 --   0x20 : Load User Controls
 --   0x21 : Load Record Configuration Select
 --   0x22 : Load Tick Divisor 
@@ -57,13 +58,17 @@
 --   0x29 : Load Read Pointer
 --   0x2a : Load Dig Trigger Position ( Num Post Trig samples to capture ).
 --   0x2b : Load RAM Page Select
---   0x2c : Load User Stimulus    
+--// 0x2c : Load User Stimulus    
 --
 --   0x30 : RLE - Read Number of RLE Controller instances
 --   0x31 : RLE - Read Number of RLE Pod instances for selected controller
 --   0x32 : RLE - Controller, Pod and Register Address Select
 --   0x33 : RLE Pod - Read / Write Register Access
 --   0x34 : RLE Pod - Pod instance of trigger source.
+--
+--   0x37 : RLE Hub - User Bus Address
+--   0x38 : RLE Hub - User Bus Write Data
+--   0x39 : RLE Hub - User Bus Read Data
 --
 -- Analog Sample Slot:
 --  { id_byte[7:0], CH1[11:0], CH0[11:0] }
@@ -78,6 +83,9 @@
 -- 0.11  11.01.23  khubbard Rev01 Include example ROM bypass for old ISE-XST
 -- 0.12  02.09.24  khubbard Rev01 Deprecated Digital HS
 -- 0.13  02.22.24  khubbard Rev01 Cleanup. View ROM Size added at 0x15
+-- 0.14  10.23.24  khubbard Rev01 Remove Digital HS. Put back user_ctrl for LS
+-- 0.15  10.30.24  khubbard Rev01 Deprecated user_stat, user_stim 
+-- 0.16  11.04.24  khubbard Rev01 Support for new hub param register at 0x3a
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -89,9 +97,9 @@ module sump3_core #
    parameter ana_ram_depth_bits = 10,
    parameter ana_ram_width      = 32, // Record width. Must be 32.
 
-   parameter rle_hub_num        =  1,  // Number of RLE Hubs (Clock Domains)
+   parameter rle_hub_num        = 1,  // Number of RLE Hubs (Clock Domains)
 
-   parameter view_rom_en        = 1,
+   parameter view_rom_en        = 0,
    parameter view_rom_size      = 16384,// In bits. 16K is nominal 512x32
    parameter view_rom_txt       = "",
 
@@ -133,12 +141,12 @@ module sump3_core #
   output reg  [rle_hub_num-1:0] trigger_mosi = 0,
   input  wire [rle_hub_num-1:0] trigger_miso,
 
-
   input  wire         trigger_in, 
   output reg          trigger_out = 0,
   output reg          sump_is_armed = 0,
   output reg          sump_is_awake = 0,
-  input  wire [31:0]  dig_triggers       // Used for Analog Block Only
+  output reg  [31:0]  core_user_ctrl = 32'd0, // Mux Ctrl
+  input  wire [31:0]  dig_triggers            // Used for Analog Block Only
 );
 
 
@@ -157,18 +165,16 @@ module sump3_core #
    parameter dig_ram_depth_bits = 8;
    parameter dig_ram_width      = 32;
    wire [dig_ram_width-1:0] dig_hs_bits;
-   reg  [31:0] user_ctrl;
-   reg  [31:0] user_stim;
+// reg  [31:0] user_ctrl;
+// reg  [31:0] user_stim;
 
 // Variable Size Capture BRAM
 // Note: The ultra synthesis pragma is specific for Xilinx Ultra RAMs
 // and may be safely removed if a problem for other technology. Regular
 // Block RAMs ( BRAMs ) work just fine too, it's just that more are needed.
+//(* ram_style = "ultra" *) reg [dig_ram_width-1:0] dig_ram_array[dig_ram_depth_len-1:0];
 (* ram_style = "ultra" *) reg [ana_ram_width-1:0] ana_ram_array[ana_ram_depth_len-1:0];
-(* ram_style = "ultra" *) reg [dig_ram_width-1:0] dig_ram_array[dig_ram_depth_len-1:0];
 
-  reg                            power_up = 1;
-  reg                            power_up_p1 = 0;
   wire  [31:0]                   user_ctrl_loc;
   wire  [31:0]                   zeros;
   wire  [31:0]                   ones;
@@ -180,32 +186,29 @@ module sump3_core #
   reg   [ana_ram_depth_bits-1:0] b_addr;
   reg   [ana_ram_width-1:0]      b_do;
   reg   [ana_ram_width-1:0]      b_do_p1;
-//reg   [ana_ram_width-1:0]      b_do_p2;
   reg   [31:0]                   b_do_p2;
 
-  reg                            c_we;
-  reg   [dig_ram_depth_bits-1:0] c_addr;
-  reg   [dig_ram_width-1:0]      c_di;
-  reg   [dig_ram_depth_bits-1:0] d_addr;
-  reg   [dig_ram_width-1:0]      d_do;
-  reg   [dig_ram_width-1:0]      d_do_p1;
-  reg   [dig_ram_width-1:0]      d_do_p2;
+//reg                            c_we;
+//reg   [dig_ram_depth_bits-1:0] c_addr;
+//reg   [dig_ram_width-1:0]      c_di;
+//reg   [dig_ram_depth_bits-1:0] d_addr;
+//reg   [dig_ram_width-1:0]      d_do;
+//reg   [dig_ram_width-1:0]      d_do_p1;
+//reg   [dig_ram_width-1:0]      d_do_p2;
 
   reg   [15:0]                   record_ptr;
   wire  [15:0]                   next_record;
-//reg   [15:0]                   wr_addr;
   reg   [ana_ram_depth_bits-1:0] wr_addr;
   reg                            wr_en;
   reg   [31:0]                   wr_data;
 
-//reg   [15:0]                   dig_wr_addr;
-  reg   [dig_ram_depth_bits-1:0] dig_wr_addr;
-  reg                            dig_wr_en;
-  reg   [dig_ram_width-1:0]      dig_wr_data;
-  reg   [dig_ram_width-1:0]      dig_hs_bits_loc;
+//reg   [dig_ram_depth_bits-1:0] dig_wr_addr;
+//reg                            dig_wr_en;
+//reg   [dig_ram_width-1:0]      dig_wr_data;
+//reg   [dig_ram_width-1:0]      dig_hs_bits_loc;
  
   reg   [15:0]                   first_record_ptr;
-  reg   [15:0]                   first_dig_ptr;
+//reg   [15:0]                   first_dig_ptr;
   reg   [19:0]                   rom_addr;
   reg   [19:0]                   view_rom_addr;
   (*rom_style = "block" *) reg [31:0] view_rom_data;
@@ -235,8 +238,8 @@ module sump3_core #
 
   reg  [15:0]                    samples_post_trig_cnt = 0;
   reg  [15:0]                    samples_post_trig_len;
-  reg  [15:0]                    dig_post_trig_cnt = 0;
-  reg  [15:0]                    dig_post_trig_len;
+//reg  [15:0]                    dig_post_trig_cnt = 0;
+//reg  [15:0]                    dig_post_trig_len;
 
   reg  [31:0]                    muxd_ram_dout = 32'd0;
   reg  [31:0]                    muxd_ram_dout_p1 = 32'd0;
@@ -255,30 +258,30 @@ module sump3_core #
   reg                            el_fin_meta = 0;
   reg                            el_fin_lb = 0;
   reg                            el_fin_lb_p1 = 0;
-  reg                            sample_now;
-  reg                            sample_now_p1;
+  reg                            sample_now = 0;
+  reg                            sample_now_p1 = 0;
 
-  reg                            trigger_forced_meta;
-  reg                            trigger_forced;
-  reg                            trigger_forced_p1;
-  reg  [3:0]                     trigger_type;
-  reg  [31:0]                    trigger_bits;
-  reg                            trigger_in_meta;
-  reg                            trigger_in_p1;
-  reg                            trigger_in_p2;
-  reg                            trigger_or;
-  reg                            trigger_or_p1;
-  reg                            trigger_or_anyedge;
-  reg                            trigger_and;
-  reg                            trigger_and_p1;
+  reg                            trigger_forced_meta = 0;
+  reg                            trigger_forced = 0;
+  reg                            trigger_forced_p1 = 0;
+  reg  [3:0]                     trigger_type = 4'd0;
+  reg  [31:0]                    trigger_bits = 32'd0;
+  reg                            trigger_in_meta = 0;
+  reg                            trigger_in_p1 = 0;
+  reg                            trigger_in_p2 = 0;
+  reg                            trigger_or = 0;
+  reg                            trigger_or_p1 = 0;
+  reg                            trigger_or_anyedge = 0;
+  reg                            trigger_and = 0;
+  reg                            trigger_and_p1 = 0;
   reg  [15:0]                    trigger_nth = 16'd1;
-  reg  [15:0]                    trigger_nth_cnt;
-  reg  [31:0]                    trigger_dly;
-  reg  [31:0]                    trigger_dly_cnt;
-  reg                            trigger_pre;
-  reg                            trigger_adc_more_p1;
-  reg                            trigger_adc_less_p1;
-  reg  [3:0]                     pre_fill;
+  reg  [15:0]                    trigger_nth_cnt = 16'd0;
+  reg  [31:0]                    trigger_dly = 32'd0;
+  reg  [31:0]                    trigger_dly_cnt = 32'd0;
+  reg                            trigger_pre = 0;
+  reg                            trigger_adc_more_p1 = 0;
+  reg                            trigger_adc_less_p1 = 0;
+  reg  [3:0]                     pre_fill = 4'd0;
 
 
   reg   [31:0]                   ctrl_01_reg = 32'h00000000;
@@ -296,7 +299,7 @@ module sump3_core #
   reg   [31:0]                   ctrl_29_reg = 32'h00000000;
   reg   [31:0]                   ctrl_2a_reg = 32'h00000000;
   reg   [31:0]                   ctrl_2b_reg = 32'h00000000;
-  reg   [31:0]                   ctrl_2c_reg = 32'h00000000;
+//reg   [31:0]                   ctrl_2c_reg = 32'h00000000;
   reg   [31:0]                   ctrl_32_reg = 32'h00000000;
   wire  [7:0]                    ctrl_32_rle_hub_inst;
   wire                           ctrl_32_rle_hub_broadcast;
@@ -312,15 +315,16 @@ module sump3_core #
   wire  [31:0]                   ctrl_13_status;
   wire  [31:0]                   ctrl_14_status;
   wire  [31:0]                   ctrl_15_status;
+//wire  [31:0]                   ctrl_16_status;
   wire  [7:0]                    cap_status;
-  reg   [7:0]                    cap_status_lb;
+  reg   [7:0]                    cap_status_lb = 8'd0;
   reg                            triggered_jk = 0;
   reg                            triggered_jk_prev = 0;
   reg                            acquired_jk = 0;
   reg                            acquired_jk_cap = 0;
   wire  [31:0]                   tick_divisor;
-  reg                            rd_inc;
-  reg                            dig_rd_inc;
+  reg                            rd_inc = 0;
+  reg                            dig_rd_inc = 0;
   wire  [7:0]                    dwords_per_record;
   reg                            hub_passthru = 0;
   reg   [11:0]                   trigger_src = 12'd0;
@@ -350,21 +354,10 @@ generate
   if ( ana_ls_enable == 1 && 2**ana_ram_depth_bits != ana_ram_depth_len ) begin
     halt_synthesis_bad_ana_ram_params();
   end
-  if ( dig_hs_enable == 1 && 2**dig_ram_depth_bits != dig_ram_depth_len ) begin
-    halt_synthesis_bad_dig_ram_params();
-  end
+//if ( dig_hs_enable == 1 && 2**dig_ram_depth_bits != dig_ram_depth_len ) begin
+//  halt_synthesis_bad_dig_ram_params();
+//end
 endgenerate
-
-
-//-----------------------------------------------------------------------------
-// Load the default record configuration on powerup
-//-----------------------------------------------------------------------------
-always @ ( posedge clk_lb ) begin : proc_default
-  if ( power_up_p1 == 1 ) begin
-    power_up   <= 0;
-  end
-  power_up_p1 <= power_up;
-end
 
 
 //-----------------------------------------------------------------------------
@@ -402,9 +395,9 @@ end
 // LocalBus Write Ctrl register
 //-----------------------------------------------------------------------------
 always @ ( posedge clk_lb ) begin : proc_lb_wr
-  el_fin_meta  <= el_fin_wide;
-  el_fin_lb    <= el_fin_meta;
-  el_fin_lb_p1 <= el_fin_lb;
+  el_fin_meta     <= el_fin_wide;
+  el_fin_lb       <= el_fin_meta;
+  el_fin_lb_p1    <= el_fin_lb;
 
   if ( lb_wr == 1 && lb_cs_ctrl == 1 ) begin
     ctrl_reg[5:0] <= lb_wr_d[5:0];
@@ -435,10 +428,10 @@ always @ ( posedge clk_lb ) begin : proc_lb_wr
       6'h29 : ctrl_29_reg <= lb_wr_d[31:0];
       6'h2a : ctrl_2a_reg <= lb_wr_d[31:0];
       6'h2b : ctrl_2b_reg <= lb_wr_d[31:0];
-      6'h2c : ctrl_2c_reg <= lb_wr_d[31:0];
       6'h32 : ctrl_32_reg <= lb_wr_d[31:0];
     endcase
   end
+
 
   // armed_jk asserts entering the 0x01 Arm ctrl state
   // it leaves on existing 0x01 ctrl state or el_fin assertin
@@ -471,11 +464,11 @@ always @ ( posedge clk_lb ) begin : proc_lb_wr
   end
 
   if ( lb_wr == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h29 ) begin
-    d_addr   <= lb_wr_d[dig_ram_depth_bits-1:0];// Load user specified address
+//  d_addr   <= lb_wr_d[dig_ram_depth_bits-1:0];// Load user specified address
     rom_addr <= lb_wr_d[19:0];
   end
   if ( dig_rd_inc == 1 ) begin
-    d_addr   <= d_addr[dig_ram_depth_bits-1:0] + 1;// Auto Increment on each read
+//  d_addr   <= d_addr[dig_ram_depth_bits-1:0] + 1;// Auto Increment on each read
     rom_addr <= rom_addr[19:0] + 1;
   end
 
@@ -521,8 +514,6 @@ always @ ( posedge clk_lb ) begin
     if ( lb_rd    == 1 && lb_cs_ctrl    == 1 ) begin
       rle_hub_sr <= { 4'd0, 3'b100, 32'd0 };
     end
-//  if ( lb_rd    == 1 && lb_cs_data    == 1 ) begin
-// New 2023.08.31
     if ( lb_rd    == 1 && lb_cs_data    == 1 && hub_passthru == 0 ) begin
       rle_hub_sr <= { 4'd0, 3'b101, 32'd0 };
     end
@@ -540,6 +531,8 @@ always @ ( posedge clk_lb ) begin
        ( ctrl_cmd[5:0] == 6'h02 ) ||
        ( ctrl_cmd[5:0] == 6'h03 ) ||
        ( ctrl_cmd[5:0] == 6'h32 ) ||
+       ( ctrl_cmd[5:0] == 6'h37 ) ||
+       ( ctrl_cmd[5:0] == 6'h38 ) ||
        ( ctrl_cmd[5:0] == 6'h23 )    ) begin
     hub_passthru <= 1;
   end else begin
@@ -610,7 +603,6 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       6'H29   : lb_rd_d  <= ctrl_29_reg[31:0];// Value loaded, not current pointer
       6'H2a   : lb_rd_d  <= ctrl_2a_reg[31:0];
       6'H2b   : lb_rd_d  <= ctrl_2b_reg[31:0];
-      6'H2c   : lb_rd_d  <= ctrl_2c_reg[31:0];
       6'H30   : lb_rd_d  <= rle_hub_num;
       6'H31   : lb_rd_d  <= rle_pod_rd_sr[31:0];
       6'H32   : lb_rd_d  <= ctrl_32_reg[31:0];
@@ -618,6 +610,10 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       6'H34   : lb_rd_d  <= rle_pod_rd_sr[31:0];
       6'H35   : lb_rd_d  <= rle_pod_rd_sr[31:0];
       6'H36   : lb_rd_d  <= rle_pod_rd_sr[31:0];
+      6'H37   : lb_rd_d  <= rle_pod_rd_sr[31:0];
+      6'H38   : lb_rd_d  <= rle_pod_rd_sr[31:0];
+      6'H39   : lb_rd_d  <= rle_pod_rd_sr[31:0];
+      6'H3a   : lb_rd_d  <= rle_pod_rd_sr[31:0];
       6'H3c   : lb_rd_d  <= rle_pod_rd_sr[31:0];
       6'H3d   : lb_rd_d  <= rle_pod_rd_sr[31:0];
       6'H3e   : lb_rd_d  <= rle_pod_rd_sr[31:0];
@@ -654,7 +650,6 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       6'H29   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H2a   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H2b   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H2c   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H30   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H31   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H32   : lb_rd_rdy <= lb_rd & lb_cs_data;
@@ -662,6 +657,10 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       6'H34   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H35   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H36   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H37   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H38   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H39   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H3a   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H3c   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H3d   : lb_rd_rdy <= lb_rd & lb_cs_data;
       6'H3e   : lb_rd_rdy <= lb_rd & lb_cs_data;
@@ -697,13 +696,15 @@ end // proc_lb_rd
   assign ctrl_0f_status        = muxd_ram_dout_p1[31:0];
 
   assign ctrl_10_status[31:16] = 16'd0;
-  assign ctrl_10_status[15:0]  = first_dig_ptr[15:0];
+//assign ctrl_10_status[15:0]  = first_dig_ptr[15:0];
+  assign ctrl_10_status[15:0]  = 16'd0;
 
   assign ctrl_11_status[31:20] = ck_freq_mhz;    // Integer MHz
   assign ctrl_11_status[19:0]  = ck_freq_fracts; // Fractional MHz bits 1/2,1/4,etc.
 
-  assign ctrl_12_status[31:24] = dig_ram_width / 32; // Number of DWORDs wide
-  assign ctrl_12_status[23:0]  = dig_ram_depth_len;  // How deep RAMs are
+//assign ctrl_12_status[31:24] = dig_ram_width / 32; // Number of DWORDs wide
+//assign ctrl_12_status[23:0]  = dig_ram_depth_len;  // How deep RAMs are
+  assign ctrl_12_status[31:0]  = 32'd0;
 
   assign ctrl_13_status[31:0]  = rec_cfg_profile[31:0];// RAM record config
   assign ctrl_14_status[31:0]  = { 20'd0, trigger_src_lb[11:0] };
@@ -712,15 +713,16 @@ end // proc_lb_rd
   assign cap_status = { 3'd0, init_ram_jk, acquired_jk, triggered_jk, 
                         pre_trig_jk, armed_jk };
 
-  assign user_ctrl_loc = ctrl_20_reg[31:0];
   assign tick_divisor  = ctrl_22_reg[31:0];
+  assign user_ctrl_loc = ctrl_20_reg[31:0];
+//assign user_stim_loc = ctrl_2c_reg[31:0];
 
 
 //-----------------------------------------------------------------------------
-// Flop some inputs
+// Flop some inputs and outputs
 //-----------------------------------------------------------------------------
 always @ ( posedge clk_cap ) begin
-  user_ctrl           <= user_ctrl_loc[31:0];
+  core_user_ctrl      <= user_ctrl_loc[31:0];
   dig_triggers_loc    <= dig_triggers[31:0];
   events_pre_inv      <= dig_triggers_loc[31:0];
   if ( trigger_type==4'h3 ) begin
@@ -852,10 +854,9 @@ always @ ( posedge clk_cap ) begin : proc_trig
   trigger_nth           <= ctrl_28_reg[15:0];
   trigger_dly           <= ctrl_27_reg[31:0];
   samples_post_trig_len <= ctrl_26_reg[15:0];
-  dig_post_trig_len     <= ctrl_2a_reg[15:0];
+//dig_post_trig_len     <= ctrl_2a_reg[15:0];
   rd_page[9:0]          <= ctrl_2b_reg[9:0];
   rd_page_p1[9:0]       <= rd_page[9:0];
-  user_stim[31:0]       <= ctrl_2c_reg[31:0];
 
   trigger_in_meta       <= trigger_in;
   trigger_in_p1         <= trigger_in_meta;
@@ -954,18 +955,20 @@ end
 // while running, count ck_tick edges and pulse sample_now at ck_tick/N rate
 //-----------------------------------------------------------------------------
 always @ ( posedge clk_cap ) begin
-  sample_now_p1 <= sample_now;
-  if ( armed_jk == 0 || acquired_jk_cap == 1 ) begin
-    ck_tick_cnt  <= 32'd1;
-    sample_now   <= 0;
-  end else begin
-    sample_now   <= 0;
-    if ( ck_tick_p1 == 1 && ck_tick_p2 == 0 ) begin 
-      if ( ck_tick_cnt == tick_divisor[31:0] ) begin 
-        sample_now   <= 1;
-        ck_tick_cnt  <= 32'd1;
-      end else begin 
-        ck_tick_cnt <= ck_tick_cnt[31:0] + 1;
+  if ( ana_ls_enable == 1 ) begin
+    sample_now_p1 <= sample_now;
+    if ( armed_jk == 0 || acquired_jk_cap == 1 ) begin
+      ck_tick_cnt  <= 32'd1;
+      sample_now   <= 0;
+    end else begin
+      sample_now   <= 0;
+      if ( ck_tick_p1 == 1 && ck_tick_p2 == 0 ) begin 
+        if ( ck_tick_cnt == tick_divisor[31:0] ) begin 
+          sample_now   <= 1;
+          ck_tick_cnt  <= 32'd1;
+        end else begin 
+          ck_tick_cnt <= ck_tick_cnt[31:0] + 1;
+        end 
       end 
     end 
   end 
@@ -1010,7 +1013,6 @@ always @ ( posedge clk_cap ) begin
     samples_post_trig_cnt <= 16'd1;
     triggered_jk_prev     <= 0;
     record_ptr            <= 16'd0;// A record base address
-//end else begin 
   end else if ( armed_jk == 1 ) begin
     el_fin                <= 0;
 
@@ -1056,7 +1058,7 @@ always @ ( posedge clk_cap ) begin
   init_jk_p2   <= init_jk_p1;
 
   // Zip through entire RAM and write 0s to every location as initialization.
-  if ( init_ram_jk == 1 ) begin
+  if ( init_ram_jk == 1 && ana_ls_enable == 1 ) begin
     wr_en   <= 1;
     wr_addr <= wr_addr[ana_ram_depth_bits-1:0] + 1;
     wr_data <= 32'd0;
@@ -1095,40 +1097,40 @@ end
 //-----------------------------------------------------------------------------
 // High Speed Digital Capture. Capture until num post-trig samples acquired. 
 //-----------------------------------------------------------------------------
-always @ ( posedge clk_cap ) begin
-  dig_hs_bits_loc <= dig_hs_bits[dig_ram_width-1:0];
-  dig_wr_data     <= dig_hs_bits_loc[dig_ram_width-1:0];
-  if ( armed_jk == 0 ) begin
-    dig_post_trig_cnt <= 16'd1;
-    dig_wr_en         <= 0;
-    dig_wr_addr       <= zeros[ dig_ram_depth_bits-1:0];
-  end else begin 
-    dig_wr_addr       <= dig_wr_addr[ dig_ram_depth_bits-1:0] + 1;
-    dig_wr_en         <= 1;
-    if ( triggered_jk == 1 ) begin
-      if ( dig_post_trig_cnt != dig_post_trig_len ) begin
-        dig_post_trig_cnt <= dig_post_trig_cnt + 1;
-      end else begin
-        dig_wr_addr       <= dig_wr_addr[ dig_ram_depth_bits-1:0];// Halt
-        dig_wr_en         <= 0;
-        first_dig_ptr     <= 16'd0;
-        first_dig_ptr     <= dig_wr_addr[ dig_ram_depth_bits-1:0] + 1;
-      end
-    end
-  end
-end
+//always @ ( posedge clk_cap ) begin
+//  dig_hs_bits_loc <= dig_hs_bits[dig_ram_width-1:0];
+//  dig_wr_data     <= dig_hs_bits_loc[dig_ram_width-1:0];
+//  if ( armed_jk == 0 ) begin
+//    dig_post_trig_cnt <= 16'd1;
+//    dig_wr_en         <= 0;
+//    dig_wr_addr       <= zeros[ dig_ram_depth_bits-1:0];
+//  end else begin 
+//    dig_wr_addr       <= dig_wr_addr[ dig_ram_depth_bits-1:0] + 1;
+//    dig_wr_en         <= 1;
+//    if ( triggered_jk == 1 ) begin
+//      if ( dig_post_trig_cnt != dig_post_trig_len ) begin
+//        dig_post_trig_cnt <= dig_post_trig_cnt + 1;
+//      end else begin
+//        dig_wr_addr       <= dig_wr_addr[ dig_ram_depth_bits-1:0];// Halt
+//        dig_wr_en         <= 0;
+//        first_dig_ptr     <= 16'd0;
+//        first_dig_ptr     <= dig_wr_addr[ dig_ram_depth_bits-1:0] + 1;
+//      end
+//    end
+//  end
+//end
 
 
 //-----------------------------------------------------------------------------
 // Pipe for speed as this may be really wide.
 //-----------------------------------------------------------------------------
-always @ ( posedge clk_cap ) begin
-  if ( dig_hs_enable == 1 ) begin
-    c_we   <= dig_wr_en;
-    c_addr <= dig_wr_addr[dig_ram_depth_bits-1:0];
-    c_di   <= dig_wr_data[dig_ram_width-1:0];
-  end
-end
+//always @ ( posedge clk_cap ) begin
+//  if ( dig_hs_enable == 1 ) begin
+//    c_we   <= dig_wr_en;
+//    c_addr <= dig_wr_addr[dig_ram_depth_bits-1:0];
+//    c_di   <= dig_wr_data[dig_ram_width-1:0];
+//  end
+//end
 
 
 //-----------------------------------------------------------------------------
@@ -1158,25 +1160,25 @@ end // always
 //-----------------------------------------------------------------------------
 // Dual Port RAM - Infer RAM here to make easy to change depth on the fly
 //-----------------------------------------------------------------------------
-always @( posedge clk_cap  )
-begin
-  if ( c_we && dig_hs_enable == 1 ) begin
-    dig_ram_array[c_addr] <= c_di;
-  end // if ( c_we )
-end // always
+//always @( posedge clk_cap  )
+//begin
+//  if ( c_we && dig_hs_enable == 1 ) begin
+//    dig_ram_array[c_addr] <= c_di;
+//  end // if ( c_we )
+//end // always
 
 
 //-----------------------------------------------------------------------------
 // Xilinx UltraRAMs are single clocked, so default to capture clock.
 // Note that the actual local bus readout is a false path multicycle
 //-----------------------------------------------------------------------------
-always @( posedge clk_cap )
-begin
-  if ( dig_hs_enable == 1 ) begin
-    d_do    <= dig_ram_array[d_addr];
-    d_do_p1 <= d_do[dig_ram_width-1:0];
-  end
-end // always
+//always @( posedge clk_cap )
+//begin
+//  if ( dig_hs_enable == 1 ) begin
+//    d_do    <= dig_ram_array[d_addr];
+//    d_do_p1 <= d_do[dig_ram_width-1:0];
+//  end
+//end // always
 
 
 //-----------------------------------------------------------------------------
@@ -1189,7 +1191,7 @@ always @( posedge clk_lb )
 begin
   rd_page_lb       <= rd_page_p1[9:0];
   muxd_ram_dout_p1 <= muxd_ram_dout[31:0];
-  d_do_p2          <= d_do_p1[dig_ram_width-1:0];// Note the ck change
+//d_do_p2          <= d_do_p1[dig_ram_width-1:0];// Note the ck change
 
   // Stuff DWORD appropriately for 32 vs 18 bit.  Note the ck change
   if ( ana_ram_width == 32 ) begin
@@ -1199,15 +1201,15 @@ begin
   if ( rd_page_lb[9:8] == 2'b00 ) begin 
     if ( rd_page_lb[7] == 1 && ana_ls_enable == 1 ) begin
       muxd_ram_dout <= b_do_p2[31:0];
-    end else if ( dig_hs_enable == 1 ) begin
-      // 128:1 32bit mux
-      for ( p = 0; p < dig_ram_width/32; p=p+1 ) begin
-        if ( rd_page_lb[6:0] == p ) begin
-          for ( q = 0; q < 32; q=q+1 ) begin
-            muxd_ram_dout[q] <= d_do_p2[ p*32+q];
-          end
-        end
-      end
+//  end else if ( dig_hs_enable == 1 ) begin
+//    // 128:1 32bit mux
+//    for ( p = 0; p < dig_ram_width/32; p=p+1 ) begin
+//      if ( rd_page_lb[6:0] == p ) begin
+//        for ( q = 0; q < 32; q=q+1 ) begin
+//          muxd_ram_dout[q] <= d_do_p2[ p*32+q];
+//        end
+//      end
+//    end
     end
   end
   if ( view_rom_en == 1 && rd_page_lb[9:8] == 2'b10 ) begin 
@@ -1237,8 +1239,8 @@ end
 
 
 //-----------------------------------------------------------------------------
-// Xilinx XST crashes trying to synthesize ROM given parameter. 
-// Generate a standalone ROM file using Python scripts instead to read param
+// Xilinx ISE XST crashes trying to synthesize ROM parameter ASCII. 
+// Generate a standalone ROM file using Python scripts instead to read param.
 //-----------------------------------------------------------------------------
 //sump3_rom u_sump3_rom
 //(

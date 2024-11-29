@@ -88,6 +88,30 @@
 # 2024.03.22 : More PyGame bar updates on RLE downloads.
 # 2024.03.26 : Fixed cmd_save_view() to include "end_group" for nested groups.
 # 2024.03.28 : Fixed identify_invalid_signals() incorrectly culling digital_rle signals.
+# 2024.04.08 : Don't error on missing RAM files.
+# 2024.04.08 : Improved hex rendering in create_drawing_lines()
+# 2024.04.08 : Added WASD cursor keys for the VideoGamer generation.
+# 2024.05.02 : Added apply_view_all and remove_view_all.
+# 2024.05.03 : Auto select a window when #Display is pressed.
+# 2024.08.16 : AES-256 Authentication and E2E Encryption added.
+# 2024.10.29 : Try/Except for invalid -source
+# 2024.10.29 : Working on user_write and user_read commands
+# 2024.10.30 : Deprecated user_stim. Added user_bus 
+# 2024.10.31 : Add no_view_rom_list for when there is no view rom. Make a generic one.
+# 2024.11.04 : Handle pod_name_en == 0.
+# 2024.11.04 : Added call to cmd_add_view_ontap inside cmd_load_uut()
+# 2024.11.05 : Added norom_view_dwords, bytes, bits feature.
+# 2024.11.05 : Added merge_view_rom_no_view_rom() 
+# 2024.11.06 : Added view rom support for bd_shell cmds and comma separated attribs
+# 2024.11.19 : New expand_view_rom_generates() 
+# 2024.11.19 : Working on mouse_event_single_click_waveform()
+# 2024.11.27 : Fixed View ROM .* generate instance issues
+# 2024.11.27 : Removed all fnmatch.filter wildcard searches. Doesn't work with [3:0] in names.
+# 2024.11.27 : set_trig now toggles trigger attribute rather than set it
+# 2024.11.27 : Added quiet to proc_cmd to greatly speed up applying views
+#
+# TODO: cmd_apply_view doesn't handle user_ctrl clashes correctly, for example if 
+#       digital_ls is used it may wrongly reject RLE Pods with user ctrls.
 #
 # DONE: view filter on user_ctrl bits
 # DONE: Offline mode. Should always come up and display last capture data
@@ -131,6 +155,7 @@ import math;
 import gzip;
 import fnmatch;
 import re;
+import time;
 #import gc
 from collections import deque
 
@@ -198,7 +223,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.03.28";
+    self.vers = "2024.11.27";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -396,6 +421,13 @@ class main:
           else:
             ( self.mouse_signal_drag_to_window, null ) = mouse_get_zone( self );
             if self.mouse_signal_drag_to_window != None:
+              mouse_delta = ( abs(self.mouse_btn1_dn[0]-self.mouse_btn1_up[0]),
+                              abs(self.mouse_btn1_dn[1]-self.mouse_btn1_up[1])  );
+              if ( mouse_delta[0] < 5 and mouse_delta[1] < 5 ):
+                mouse_event_single_click_waveform( self );
+#               print("Mouse!");
+ 
+
               b = self.mouse_signal_drag_to_window + 1;
               if self.container_view_list[0].visible == True:
 #               print("Signal DRAG                to Window-%d" % (   b ) );
@@ -419,7 +451,8 @@ class main:
 #                   for each_view in [ self.container_view_list[available] ]:
 #                     print( dir(each_view_name ));
 #                     print( each_view.check_pressed() );
-#HERE3
+#           else:
+#             print("Unclaimed Mouse Action");
 
 
         if event.button == 2 : 
@@ -588,7 +621,9 @@ class main:
 
 #           if no_signals_selected:
 #           if no_signals_selected and self.select_text_i == None:
-#HERE7
+#           if no_analog_signals_selected and self.select_text_i == None:
+#           if no_analog_signals_selected and self.select_text_i == None and \
+#              self.container_display_list[0].visible:
             if no_analog_signals_selected and self.select_text_i == None:
               button_press = event.button;
               if self.vars["scroll_wheel_pan_en" ] == "0" and zone_i == 3:
@@ -625,7 +660,8 @@ class main:
 
             
             # Change the vertical scale on the selected analog waveform signal(s) 
-            else:
+#           else:
+            elif self.container_display_list[0].visible:
               for each_signal in self.signal_list:
                 if each_signal.selected:
                   if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
@@ -647,13 +683,6 @@ class main:
                       elif ( event.button == 4 ):
                         proc_cmd( self, "scale_up" );
 
-#                     each_signal.vertical_offset -= .025;
-#                     each_signal.vertical_offset += .025;
-#                     each_signal.vertical_scale *= 1.25;
-#                     each_signal.vertical_scale *= 1.025;
-#                     each_signal.vertical_scale /= 1.25;
-#                     each_signal.vertical_scale /= 1.025;
-
               # Only update the windows that have the selected signals in them
               for (i,each_win) in enumerate( self.window_list ):
                 for each_signal in self.signal_list:
@@ -661,9 +690,9 @@ class main:
                     if each_signal in each_win.signal_list:
                       if not i in self.refresh_window_list:
                         self.refresh_window_list += [i];
+
         if ( self.has_focus and (  event.button == 4 or event.button == 5 ) ):
           self.last_scroll_wheel_tick = tick_time;
-
 
         # 1==LeftButton detect if a waveform window has been selected. Highlight the border
         if event.button == 1 :
@@ -764,6 +793,7 @@ class main:
           print("GUI Event %s" %  event.ui_object_id );
         if cmd_str != None:
           proc_cmd( self, cmd_str );
+#         print( cmd_str );
 #       self.refresh_waveforms = True;
 
         main_menu_press = False;
@@ -897,8 +927,8 @@ class main:
           self.container_display_list[0].visible     = True;
           self.select_text_i = None;# Clear old text selections
           main_menu_press = True;
+          auto_select_window(self);
           self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
-
 
         if ( main_menu_press == True ):
           proc_main_menu_button_press( self );
@@ -1018,6 +1048,12 @@ def auto_select_window( self ):
     for j in range(2,-1,-1):
       if self.window_list[j].panel.visible:
         select_window( self, j );
+  else:
+    select_window( self, i );
+#   select_window( self, i );
+#   self.window_selected = i;
+#   select_window( self, 0 );# Default to 1st window
+  print("self.window_selected is now %s" % self.window_selected );
   return;
 
 def select_window( self, wave_i ):
@@ -1239,8 +1275,11 @@ def display_text_stats( self ):
           ls_time = l_time + ( start * period );
           rs_time = ls_time + ( shown * period );
 
+#         j1 = round( ( ls_time / total_time ) * w);
+#         j2 = round( ( rs_time / total_time ) * w);
+          # New 2024.11.05, fixed the varying width of "{ }" issue
           j1 = round( ( ls_time / total_time ) * w);
-          j2 = round( ( rs_time / total_time ) * w);
+          j2 = j1+round( ( (rs_time-ls_time) / total_time ) * w);
 #         print( ls_time, rs_time, j1, j2 );
           if j1 == j2:
             if j1 == int( w ):
@@ -1251,9 +1290,6 @@ def display_text_stats( self ):
           else:
             line = line[:j1] + "{" + line[j1+ 1:]
             line = line[:j2] + "}" + line[j2+ 1:]
-#           if "{" not in line:
-#             line = line.replace("}","|" );
-#           print( ls_time, rs_time, j1, j2 );
 
           j = round( ( l_time / total_time ) * w);
           line = line[:j] + "[" + line[j+ 1:]
@@ -1367,7 +1403,6 @@ def display_text_stats( self ):
 #             rts += [indent+delta+"T = %0.1f %s" % ( t_delta, each_sig.sample_unit )];
 #             v_delta = abs( analog_value_list[0] - analog_value_list[1] );
 #             rts += [indent+delta+"A = %0.1f %s" % ( v_delta, each_sig.units )];
-# HERE12
 
     if self.window_selected != None :
       # Display info about selected visible signals in the selected window 
@@ -1864,6 +1899,43 @@ def mouse_event_single_click( self ):
             each_signal.selected = not each_signal.selected;# Toggle
   return rts;
 
+
+def mouse_event_single_click_waveform( self ):
+  (self.mouse_x,self.mouse_y) = pygame.mouse.get_pos();
+  margin = 5;
+  rts = False;# Assume nothing select and no redraw
+  for each_signal in self.signal_list:
+    if each_signal.visible == True:
+      if each_signal.parent != None and each_signal.name_rect != None:
+        (x1,y1,w1,h1) = each_signal.parent.panel.rect;# Waveform panel
+        (x2,y2,w2,h2) = each_signal.name_rect;# signal name text rectangle
+        # Is click right of the signal name?
+        if ( ( self.mouse_x > ( x1+x2+w2 ) ) and
+             ( self.mouse_y > ( y1+y2    ) ) and
+             ( self.mouse_y < ( y1+y2+h2 ) )     ):
+          print( each_signal.name );
+          for each_cursor in self.cursor_list:
+            if ( each_cursor.visible == True ):
+              each_cursor.x = self.mouse_x - (3*margin);
+              update_cursors_to_mouse(self);
+              break;
+#         if self.container_display_list[0].visible and self.window_selected != None :
+#           win_num      = self.window_selected;
+#           my_win       = self.window_list[win_num];
+#           timezone     = my_win.timezone;
+#           samples_start_offset = my_win.samples_start_offset;
+#           samples_shown        = my_win.samples_shown;
+#           samples_total        = my_win.samples_total;
+#           if my_win.samples_shown != None:
+#             if each_signal.source != None and "digital_rle" in each_signal.source:
+#               center_time = samples_start_offset + ( samples_shown // 2 );
+#               center_i = None;
+#               for (i,rle_time) in enumerate( each_sig.rle_time ):
+#                 if ( rle_time + my_win.trigger_index ) > center_time:
+#                   break;
+#HERE
+  return rts;
+
 def proc_expand_group( self, my_sig ):
   print("proc_expand_group() %s" % my_sig.name );
   # Expand one level down only and stop. Only collapse uses recursion
@@ -1881,7 +1953,7 @@ def proc_expand_group( self, my_sig ):
 
 def proc_collapse_group( self, my_sig ):
   my_sig.collapsed = True;
-# print("proc_collapse_group() %s" % my_sig.name );
+  print("proc_collapse_group() %s" % my_sig.name );
   recursive_signal_collapse( self, parent = my_sig );
   return;
 
@@ -2051,6 +2123,7 @@ def mouse_get_zone( self ):
 ###############################################################################
 # Convert Button object_id to tool tip string
 def convert_object_id_to_tool_tip( self, id_str ):
+# print( id_str );
   cmd_str = None;
   if id_str == "#Controls.#Main.#Exit"                 : cmd_str = "exit";
   elif id_str == "#Controls.#Main.#Acquisition"        : cmd_str = "acquisition";
@@ -2072,6 +2145,8 @@ def convert_object_id_to_tool_tip( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
   elif id_str == "#Controls.#Acquisition.#UUT"         : cmd_str = "load_uut";
   elif id_str == "#Controls.#Acquisition.#Target"      : cmd_str = "load_uut";
+  elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
+  elif id_str == "#Controls.#Views.#RemoveAll"         : cmd_str = "remove_view_all";
   elif id_str == "#Controls.#Display.#Window-1"        : cmd_str = "window1";
   elif id_str == "#Controls.#Display.#Window-2"        : cmd_str = "window2";
   elif id_str == "#Controls.#Display.#Window-3"        : cmd_str = "window3";
@@ -2236,6 +2311,8 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Save_PZA"    : cmd_str = "save_pza";
   elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
 # elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
+  elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
+  elif id_str == "#Controls.#Views.#RemoveAll"         : cmd_str = "remove_view_all";
   elif id_str == "#Controls.#Display.#ZoomIn"          : cmd_str = "zoom_in";
   elif id_str == "#Controls.#Display.#ZoomOut"         : cmd_str = "zoom_out";
   elif id_str == "#Controls.#Display.#ZoomCurs"        : cmd_str = "zoom_to_cursors";
@@ -2517,7 +2594,6 @@ def draw_digital_lines( self, my_window ):
   w = my_surface.get_width();
   h = my_surface.get_height();
 
-#HERE9
   # Draw the trigger
   if my_trigger_x != None:
     if ( my_trigger_x+7 ) >= w:
@@ -2591,7 +2667,6 @@ def draw_digital_lines( self, my_window ):
   assigned  = len( self.container_view_list )-2;
   assigned_selected  = [ self.container_view_list[assigned].get_single_selection() ]; 
 # print("assigned_selected == %s " % assigned_selected );
-  #HERE
   y = 0.0; i = 0;
   for (each_sig, y_space, each_line_list, each_point_list) in my_draw_list:
     # Highlight entire views if the view is selected in the applied box
@@ -2603,7 +2678,6 @@ def draw_digital_lines( self, my_window ):
 #   # Only bother drawing the text if there is enough room
 #   if self.txt_height < y_space:
 
-# HERE8
     # Only bother drawing the text if it is visible in the window
     y = ( i * y_space ) + my_window.y_offset;
     if y >= 0 and y < h:
@@ -2860,7 +2934,6 @@ def create_drawing_lines( self, my_win ):
 # if y_space > ( self.txt_height * 2 ):
 #   y_space = self.txt_height * 2;
 
-#HERE5
 # if vis_sigs != 0:
 #   y_space = h / vis_sigs;
 # else:
@@ -2948,7 +3021,6 @@ def create_drawing_lines( self, my_win ):
       if each_sig.visible:
         my_sig_list_culled += [ each_sig ];
 
-#HERE6
     bit_space = y_space * 0.7;# Height of a binary signal, must be less than y_space.
 #   for ( i, each_sig ) in enumerate( my_sig_list ):
     for ( i, each_sig ) in enumerate( my_sig_list_culled ):
@@ -3039,14 +3111,21 @@ def create_drawing_lines( self, my_win ):
       if type_rle and visible_on_screen:
         if each_sig.format != "binary" and rle_time_to_pixels != None:
           if each_sig.format == "hex":
-            sig_color = rgb2color( each_sig.color );
-            txt_r_nospace = self.font.render("<>",True, sig_color );
             if each_sig.selected:
               sig_color = self.color_selected;
+            else:
+              sig_color = rgb2color( each_sig.color );
+
+            txt_r_nospace = self.font.render("<>",True, sig_color );
+#           txt_open_bracket = self.font.render("<",True, sig_color );
+            txt_close_bracket = self.font.render(">",True, sig_color );
+            w2 = txt_close_bracket.get_width();
             if len( rle_value_time_pairs ) > 1:
               ( last_value, last_time ) = rle_value_time_pairs[0];
               cur_val_list = [];
               vasili = True;
+              last_hex_str = None;
+              first_drawn = False;
               for (each_value, each_time) in rle_value_time_pairs[1:]:
                 x1 = int( each_time * rle_time_to_pixels );
                 # Pygame will crash if pels are too far off screen
@@ -3060,10 +3139,9 @@ def create_drawing_lines( self, my_win ):
                   if hex_str == None:
                     hex_str = "%08x" % each_value;
                     hex_str = hex_str[ - each_sig.nibble_cnt :];
-                  txt = "<"+hex_str+">";
-#                 if each_sig.selected:
+                  txt = "<"+hex_str+" ";
                   if True:
-                    cur_val_list += [(my_win,x1,y1,txt)];
+                    cur_val_list += [(my_win,x1,y1,txt+">")];
                   txt_r = self.font.render(txt,True, sig_color );
                   if vasili:
                     w1 = txt_r.get_width();
@@ -3071,17 +3149,44 @@ def create_drawing_lines( self, my_win ):
                 else:
                   txt_r = None;
 
-                # Don't render text that is getting overwritten by new sample, draw "<>" instead
-                # Both a performance and clutter feature
+                # Draw the sample before the 1st sample drawn on the display. 
+                # the RLE time of it may be off screen. We're showing the value 
+                # before the current value
+                if txt_r != None:
+                  if not first_drawn:
+                    hex_str2 = None;
+                    if len( each_sig.fsm_state_dict ) != 0:
+                      if each_sig.fsm_state_dict.get(last_value) != None:
+                        hex_str2 = each_sig.fsm_state_dict[last_value];
+                    if hex_str2 == None:
+                      hex_str2 = "%08x" % last_value;
+                      hex_str2 = hex_str2[ - each_sig.nibble_cnt :];
+                    txt2 = ""+hex_str2+">";
+                    txt_r2 = self.font.render(txt2,True, sig_color );
+                    w2 = txt_r2.get_width();
+                    if ( ( x1-w2 ) > 0 ):
+                      line_list += [ (x1-w2,y1,txt_r2) ];# Only draw if room on screen
+                    first_drawn = True;
+
+                # Don't render text that is getting overwritten by new sample, backup and
+                # draw "<>" instead of full sample. Both a performance and clutter feature
                 if len(line_list) >= 1 and txt_r != None:
                   (last_x,last_y,last_txt_r) = line_list[-1];
                   if last_x + w1 > x1:
                     line_list[-1] = (last_x,last_y,txt_r_nospace);
-                  
+                  else:
+                    if last_hex_str != None:
+                      if ( x1 - last_x ) > ( w1 + w2 ):
+                        txt_wider = self.font.render("< "+last_hex_str,True, sig_color );
+                        line_list[-1] = (last_x,last_y,txt_wider );
+                    line_list += [ (x1-w2,y1,txt_close_bracket) ];# Turn "<01   " into "<01  >"
+                  last_hex_str = hex_str;
                 if txt_r != None:
                   line_list += [ (x1,y1,txt_r) ];
-                last_value = each_value;
-                last_time  = each_time;
+
+                last_value   = each_value;
+                last_time    = each_time;
+                # end of for (each_value, each_time) in rle_value_time_pairs[1:]:
               for (i, each_cur) in enumerate(self.cursor_list):
                 each_cur.sig_value_list[ y1 ] = cur_val_list;
               draw_list += [ ( each_sig, y_space, line_list, point_list ) ];
@@ -3446,7 +3551,7 @@ def resize_containers(self):
         else:
           each.panel.hide();
   update_toggle_buttons(self);
-  auto_select_window(self);
+# auto_select_window(self);
 
 
   init_surfaces(self);# NEW
@@ -3528,7 +3633,7 @@ def create_view_selections( self ):
         if each_view.timezone != None and my_win.timezone != None:
           if each_view.timezone.lower() != my_win.timezone.lower():
             rejected = True;
-            print("View Rejection due to Timezone : %s" % each_view.name );
+#           print("View Rejection due to Timezone : %s" % each_view.name );
         if not rejected:
           # New 2023.12.13 Not sure where this "None" is coming from. Related to adding save_view
           if each_view.name != None:
@@ -3638,7 +3743,11 @@ def init_widgets(self):
 
   y_top += container_builder_acquisition( self, rect, self.y_top, button_txt_list );
 
-  button_txt_list = [ "Apply",       "Remove",   ];
+# button_txt_list = [ "Apply",       "Remove",   ];
+  button_txt_list = [ "Apply",       "Remove", 
+                      "ApplyAll",    "RemoveAll",
+                                                 ];
+
   y_top += container_builder_views(self, rect, self.y_top, button_txt_list);
 
 # left_arrow  = "\u2190PanLeft";# unicode for left arrow. I like source code in 7bit ASCII.
@@ -4321,7 +4430,9 @@ def cmd_page_down( self ):
 # scroll_up 
 def cmd_scroll_up( self ):
   rts = [];
-  if self.container_display_list[0].visible and self.window_selected != None :
+# if self.container_display_list[0].visible and self.window_selected != None :
+# Support scrolling on Acquisition tab since that's were triggers are selected
+  if self.window_selected != None :
     win_num = self.window_selected;
     my_win  = self.window_list[win_num];
     y_delta = self.txt_height/1;
@@ -4337,7 +4448,9 @@ def cmd_scroll_up( self ):
 # scroll_down
 def cmd_scroll_down( self ):
   rts = [];
-  if self.container_display_list[0].visible and self.window_selected != None :
+# if self.container_display_list[0].visible and self.window_selected != None :
+# Support scrolling on Acquisition tab since that's were triggers are selected
+  if self.window_selected != None :
     win_num = self.window_selected;
     my_win  = self.window_list[win_num];
     y_delta = self.txt_height/1;
@@ -4549,9 +4662,10 @@ def cmd_zoom_to_cursors( self ):
 #   print("samples_total = %d" % samples_total );
 #   print("x_space       = %d" % x_space       );
 
-    if samples_total == 0 or samples_total == None:
+    if samples_total == 0 or samples_total == None or x_space == 0:
       return rts;
 #   if self.cursor_list[0].visible and self.cursor_list[1].visible:
+#   if x_space != 0:
     if True:
       c1_i = float( self.cursor_list[0].x / x_space ) + samples_start_offset;
       c2_i = float( self.cursor_list[1].x / x_space ) + samples_start_offset;
@@ -4814,6 +4928,21 @@ def cmd_load_uut( self, words ):
   cmd_str = "source " + filename;
   self.view_ontap_list = [];# Erase any old views from a different UUT
   rts = [ proc_cmd( self, cmd_str ) ];
+
+  # Look for any view files in the uut directory
+  view_file_list = glob.glob(os.path.join(file_path, "*.txt" ) );# New 2024.11.04
+  m = len( view_file_list ); 
+  for (i, each_file_name) in enumerate( view_file_list ):
+    perc = int((100*i)/m );
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" %d%% Importing Saved Views" % perc);
+    (fn_path, fn_nopath ) = os.path.split( each_file_name );
+    (fn_noext, fn_ext ) = os.path.splitext( fn_nopath );
+    if (i+1) < m:
+      defer_gui_update = True;
+    else:
+      defer_gui_update = False;
+    cmd_add_view_ontap(self, ["add_view_ontap", fn_nopath ], defer_gui_update );
+
 # create_view_ontap_list(self);
 # os.chdir( old_cwd );
 # for each in self.view_ontap_list:
@@ -4835,6 +4964,7 @@ def cmd_load_uut( self, words ):
 def cmd_save_pza( self, words ):
   log( self, ["save_pza()"] );
   rts = [];
+  start_time = self.pygame.time.get_ticks();
   file_out = words[1];
 
   download_rle_ondemand_all( self );
@@ -4861,6 +4991,9 @@ def cmd_save_pza( self, words ):
   list2filegz( file_out, pza_list );# Gzipped
   count = len( glob_list );
   rts += ["save_pza() saved %d files to %s" % ( count, file_out ) ];
+  stop_time = self.pygame.time.get_ticks();
+  delta_time = stop_time - start_time;
+  log( self, ["cmd_save_pza() Download Time = %d mS" % delta_time] );
   return rts;
 
 
@@ -4976,15 +5109,22 @@ def log( self, txt_list ):
 ###############################################################################
 
 ########################################################
-# Establish connection to Sump2 hardware
+# Establish connection to Sump3 hardware
 def cmd_sump_connect( self ):
   log( self, ["sump_connect()"] );
+  time_start = time.time();
   erase_old_sump_ram_files( self );
   rts = [];
+# self.bd=Backdoor(  self.vars["bd_server_ip"],
+#                    int( self.vars["bd_server_socket"], 10 ) );# Note dec
   self.bd=Backdoor(  self.vars["bd_server_ip"],
-                     int( self.vars["bd_server_socket"], 10 ) );# Note dec
+                     int( self.vars["bd_server_socket"], 10 ),
+                     int( self.vars["aes_key"], 16 ),          
+                     int( self.vars["aes_authentication"], 10 ) 
+                  );
+
   if ( self.bd.sock == None ):
-    txt = "ERROR: Unable to locate BD_SERVER";
+    txt = "ERROR: Unable to connect to BD_SERVER";
     log( self, [ txt ] );
     return rts;
 
@@ -5023,10 +5163,10 @@ def cmd_sump_connect( self ):
   rts += ["ana_ls_enable = %01x" % self.sump.cfg_dict['ana_ls_enable']];
   rts += ["dig_hs_enable = %01x" % self.sump.cfg_dict['dig_hs_enable']];
   rts += ["rle_hub_num   = %d"   % self.sump.cfg_dict['rle_hub_num']];
-  rts += ["ana_ram_depth = %dK" % ( self.sump.cfg_dict['ana_ram_depth'] / 1024 )];
-  rts += ["ana_ram_width = %d" % ( self.sump.cfg_dict['ana_ram_width'] *32 )];
-  rts += ["dig_ram_depth = %dK" % ( self.sump.cfg_dict['dig_ram_depth'] / 1024 )];
-  rts += ["dig_ram_width = %d" % ( self.sump.cfg_dict['dig_ram_width'] *32 )];
+  rts += ["ana_ram_depth = %dK"  % ( self.sump.cfg_dict['ana_ram_depth'] / 1024 )];
+  rts += ["ana_ram_width = %d"   % ( self.sump.cfg_dict['ana_ram_width'] *32 )];
+  rts += ["dig_ram_depth = %dK"  % ( self.sump.cfg_dict['dig_ram_depth'] / 1024 )];
+  rts += ["dig_ram_width = %d"   % ( self.sump.cfg_dict['dig_ram_width'] *32 )];
   rts += ["view_rom_kb   = %dKb" % ( self.sump.cfg_dict['view_rom_kb'] )];
 
 # New 2023.08.23
@@ -5051,13 +5191,17 @@ def cmd_sump_connect( self ):
 
     hub_ck_freq = self.sump.rd( self.sump.cmd_rd_rle_hub_ck_freq)[0];
     hub_ck_freq_mhz = float( float(hub_ck_freq) / float( 2**20 ) );
-    hub_name_0_3  = self.sump.rd( self.sump.cmd_rd_rle_hub_name_0_3)[0];
-    hub_name_4_7  = self.sump.rd( self.sump.cmd_rd_rle_hub_name_4_7)[0];
-    hub_name_8_11 = self.sump.rd( self.sump.cmd_rd_rle_hub_name_8_11)[0];
-    hub_name =  self.sump.dword_to_ascii( hub_name_0_3 );
-    hub_name += self.sump.dword_to_ascii( hub_name_4_7 );
-    hub_name += self.sump.dword_to_ascii( hub_name_8_11 );
-    hub_name = hub_name.replace(" ","");
+    hub_hw_cfg      = self.sump.rd( self.sump.cmd_rd_rle_hub_hw_cfg)[0];
+    if ( hub_hw_cfg & 0x00000001 ) == 0:
+      hub_name_0_3  = self.sump.rd( self.sump.cmd_rd_rle_hub_name_0_3)[0];
+      hub_name_4_7  = self.sump.rd( self.sump.cmd_rd_rle_hub_name_4_7)[0];
+      hub_name_8_11 = self.sump.rd( self.sump.cmd_rd_rle_hub_name_8_11)[0];
+      hub_name =  self.sump.dword_to_ascii( hub_name_0_3 );
+      hub_name += self.sump.dword_to_ascii( hub_name_4_7 );
+      hub_name += self.sump.dword_to_ascii( hub_name_8_11 );
+      hub_name = hub_name.replace(" ","");
+    else:
+      hub_name = "%d" % hub;
     a += ["  |"];
     a += ["  + Hub-%d : %s : %f MHz" % ( hub, hub_name, hub_ck_freq_mhz ) ];
     if hub == len(self.sump.rle_hub_pod_list)-1:
@@ -5071,21 +5215,25 @@ def cmd_sump_connect( self ):
       pod_hw_cfg      = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_hw_cfg )[0];
       pod_ram_cfg     = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_ram_cfg )[0];
       pod_instance    = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_instance  )[0];
-      pod_name_0_3    = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_0_3  )[0];
-      pod_name_4_7    = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_4_7  )[0];
-      pod_name_8_11   = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_8_11 )[0];
       pod_triggerable = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_triggerable )[0];
       pod_view_rom_kb = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_view_rom_kb )[0];
+
+      if ( pod_hw_cfg & 0x00000020 ) == 0:
+        pod_name_0_3    = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_0_3  )[0];
+        pod_name_4_7    = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_4_7  )[0];
+        pod_name_8_11   = self.sump.rd_pod( hub=hub,pod=pod,reg=self.sump.rle_pod_addr_pod_name_8_11 )[0];
+        pod_name        =  self.sump.dword_to_ascii( pod_name_0_3 );
+        pod_name        += self.sump.dword_to_ascii( pod_name_4_7 );
+        pod_name        += self.sump.dword_to_ascii( pod_name_8_11 );
+        pod_name        = pod_name.replace(" ","");
+      else:
+        pod_name = "%d" % pod;# pod_name_en parameter was 0
 
       for i in range(0,31):
         bit = 2**i;
         if ( ( pod_triggerable & bit ) != 0x00000000 ):
           triggerable_list += ["digital_rle[%d][%d][%d]" % ( hub,pod,i ) ];
 
-      pod_name =  self.sump.dword_to_ascii( pod_name_0_3 );
-      pod_name += self.sump.dword_to_ascii( pod_name_4_7 );
-      pod_name += self.sump.dword_to_ascii( pod_name_8_11 );
-      pod_name = pod_name.replace(" ","");
       pod_hw_rev    = ( pod_hw_cfg & 0xFF000000 ) >> 24;
       pod_view_rom_en = ( pod_hw_cfg & 0x00000002 ) >> 1;
       pod_num_addr_bits = ( pod_ram_cfg & 0x000000FF ) >> 0;
@@ -5191,11 +5339,14 @@ def cmd_sump_connect( self ):
 
 # generate_view_rom_files( self, self.sump.view_rom_list );
 # delete_view_rom_files( self );
+  log( self, ["generate_view_rom_files() view_rom_list of length %d" % len( view_rom_list ) ] );
   generate_view_rom_files( self, view_rom_list );
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Generating View ROM files......");
   generate_rlepodlist_file( self, file_name="sump_rle_podlist.txt", pod_list=self.sump.rle_hub_pod_list );
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
-
+  time_stop = time.time();
+  connect_time_ms = int((time_stop-time_start)*1000);
+  log( self, ["sump_connect time = %d ms" % connect_time_ms ] );
   return rts;
 
 
@@ -5255,12 +5406,15 @@ def generate_view_rom_files( self, view_rom_list ):
     if words[0] == "end_view":
       view_list += [ "add_view" ];
       log( self,["Creating %s %s" % ( view_name, file_name ) ]);
-      file_name = os.path.join( file_path, file_name );
-      list2file( file_name, view_list );
-      view_list = [];
-      # Update the GUI List
-      ( null , file_no_path ) = os.path.split( file_name );
-      cmd_add_view_ontap(self, ["add_view_ontap", file_no_path, "defer_gui_update" ] ); 
+      if "*" not in file_name:
+        file_name = os.path.join( file_path, file_name );
+        list2file( file_name, view_list );
+        view_list = [];
+        # Update the GUI List
+        ( null , file_no_path ) = os.path.split( file_name );
+        cmd_add_view_ontap(self, ["add_view_ontap", file_no_path, "defer_gui_update" ] ); 
+      else:
+        log( self,["ERROR-8675309 : Invalid file_name %s" % ( file_name ) ]);
   create_view_selections( self );# Ugly putting this here
   return;
 
@@ -5341,6 +5495,44 @@ def cmd_sump_sleep( self ):
     log( self, ["ERROR-1977: Sump HW not connected"] );
   return;
 
+########################################################
+# Load the user_addr register and read the user_stat
+def cmd_sump_user_read( self, words ):
+  log( self, ["sump_user_read()"] );
+  addr = int(words[1],16);
+  if not self.sump_connected:
+    log( self, ["ERROR-1977: Sump HW not connected"] );
+    return;
+
+  self.sump.wr( self.sump.cmd_wr_rle_hub_user_addr, addr );
+  # Only one RLE Hub should have non-zero data
+  data = 0x00000000;
+  rle_hub_cnt   = self.sump.rd( self.sump.cmd_rd_rle_hub_config)[0];
+  print("RLE Hub Count is %d" % rle_hub_cnt );
+  for i in range(0,rle_hub_cnt):
+    self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, (i << 16) );
+    hub_data = self.sump.rd( self.sump.cmd_rd_rle_hub_user_rd_d )[0];
+    if hub_data != 0x00000000:
+      data = hub_data;
+  txt_rts = [ "%08x" % data ];
+  return txt_rts;
+  
+
+########################################################
+# Load the user_addr register and write the user_stim 
+def cmd_sump_user_write( self, words ):
+  log( self, ["sump_user_write()"] );
+  if not self.sump_connected:
+    log( self, ["ERROR-1977: Sump HW not connected"] );
+    return;
+  addr = int(words[1],16);
+  data_list = [ int( each,16) for each in filter(None,words[2:]) ];
+  for each in data_list:
+    self.sump.wr( self.sump.cmd_wr_rle_hub_user_addr, addr );
+    self.sump.wr( self.sump.cmd_wr_rle_hub_user_wr_d, each );
+    addr += 4;
+  return;
+
 
 ########################################################
 # Arm the sump engine to acquire data with specified trigger
@@ -5367,7 +5559,7 @@ def cmd_sump_arm( self ):
   trig_delay    = float( self.vars["sump_trigger_delay" ]    );# delay in float uS
   trig_nth      = int(   self.vars["sump_trigger_nth"   ],10 );
   user_ctrl     = int(   self.vars["sump_user_ctrl"     ],16 );
-  user_stim     = int(   self.vars["sump_user_stim"     ],16 );
+# user_stim     = int(   self.vars["sump_user_stim"     ],16 );
   tick_divisor  = int(   self.vars["sump_ls_clock_div"  ],10 );
   trig_loc      = float( self.vars["sump_trigger_location" ] );# Float percentage 
   trig_ana_lvl  = float( self.vars["sump_trigger_analog_level"] );
@@ -5464,7 +5656,7 @@ def cmd_sump_arm( self ):
   self.sump.wr( self.sump.cmd_wr_trig_delay,         trig_delay    );
   self.sump.wr( self.sump.cmd_wr_trig_nth,           trig_nth      );
   self.sump.wr( self.sump.cmd_wr_user_ctrl,          user_ctrl     );
-  self.sump.wr( self.sump.cmd_wr_user_stim,          user_stim     );
+# self.sump.wr( self.sump.cmd_wr_user_stim,          user_stim     );
   self.sump.wr( self.sump.cmd_wr_tick_divisor,       tick_divisor  );
   self.sump.wr( self.sump.cmd_wr_ana_post_trig_len,  ana_post_trig );
   self.sump.wr( self.sump.cmd_wr_dig_post_trig_len,  dig_post_trig );
@@ -5475,7 +5667,7 @@ def cmd_sump_arm( self ):
   log( self, ["trig_delay     = %08x" % trig_delay     ] );
   log( self, ["trig_nth       = %08x" % trig_nth       ] );
   log( self, ["user_ctrl      = %08x" % user_ctrl      ] );
-  log( self, ["user_stim      = %08x" % user_stim      ] );
+# log( self, ["user_stim      = %08x" % user_stim      ] );
   log( self, ["tick_divisor   = %08x" % tick_divisor   ] );
   log( self, ["ana_post_trig  = %08x" % ana_post_trig  ] );
   log( self, ["dig_post_trig  = %08x" % dig_post_trig  ] );
@@ -5490,9 +5682,8 @@ def cmd_sump_arm( self ):
       pod_user_ctrl = hub_pod_user_ctrl_dword_hash[(hub,pod)];
       self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, ((hub<<16)+(pod<<8)+(reg<<0)) );
       self.sump.wr( self.sump.cmd_wr_rle_pod_data, pod_user_ctrl );
-#     self.sump.wr( self.sump.cmd_wr_rle_pod_data, user_ctrl );
-      log( self, ["  RLE Hub-%d, Pod-%d : user_ctrl=%08x" % \
-        (hub,pod,pod_user_ctrl)] );
+#     log( self, ["  RLE Hub-%d, Pod-%d : user_ctrl=%08x" % \
+#       (hub,pod,pod_user_ctrl)] );
 
   log( self, ["Processing RLE Mask Bits"] );
   rle_mask_hash = proc_rle_mask(self, self.sump.rle_hub_pod_list );
@@ -5528,10 +5719,8 @@ def cmd_sump_arm( self ):
       reg  = self.sump.rle_pod_addr_trigger_en;
       self.sump.wr( self.sump.cmd_wr_rle_pod_inst_addr, ((hub<<16)+(pod<<8)+(reg<<0)) );
       self.sump.wr( self.sump.cmd_wr_rle_pod_data, trig_field );
-      log( self, ["  RLE Hub-%d, Pod-%d : Trigger Field=%08x" % \
-        (hub,pod,trig_field)] );
-#     trig_field = self.sump.rd( self.sump.cmd_wr_rle_pod_data)[0];
-#     print("Readback of trig_field is %08x" % ( trig_field ) );
+#     log( self, ["  RLE Hub-%d, Pod-%d : Trigger Field=%08x" % \
+#       (hub,pod,trig_field)] );
 
   self.sump.wr( self.sump.cmd_state_reset, 0x00000000 );
   self.sump.wr( self.sump.cmd_state_init,  0x00000000 );# Initialize Sump RAM
@@ -5656,8 +5845,12 @@ def cmd_sump_set_trigs( self ):
   for each_sig in self.signal_list:
     if each_sig.selected:
       if each_sig.triggerable:
-        each_sig.trigger = True;
-        each_sig.selected = False;# Deselect so it will turn red
+        if not each_sig.trigger:
+          each_sig.trigger = True;
+          each_sig.selected = False;# Deselect so it will turn red
+        else:
+          each_sig.trigger = False;
+          each_sig.selected = False;# Deselect so it will turn green
       else:
         rts +=["ERROR: %s is not triggerable" % each_sig.name];
 
@@ -5735,6 +5928,7 @@ def cmd_sump_query( self ):
 def cmd_sump_download( self ):
   log( self, ["sump_download()"] );
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Downloading...");
+  start_time = self.pygame.time.get_ticks();
   if not self.sump_connected:
     log( self, ["ERROR-1977: Sump HW not connected"] );
     return;
@@ -5875,12 +6069,16 @@ def cmd_sump_download( self ):
   self.status_downloading = False;
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
   self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
-  log( self, ["sump_download() : Completed.\n"] );
+  stop_time = self.pygame.time.get_ticks();
+  delta_time = stop_time - start_time;
+  log( self, ["sump_download() : Completed in %d mS.\n" % delta_time] );
   return;
 
 # create_drawing_lines() will check to see if a signal has no values
 # and call this to download RLE samples ondemand
 def download_rle_ondemand( self, rle_sig_source ):
+  print("download_rle_ondemand( %s )" % rle_sig_source );
+  start_time = self.pygame.time.get_ticks();
   if "digital_rle" in rle_sig_source:
     # "digital_rle[0][1][1:0]"
     source_name = rle_sig_source.replace("["," ");
@@ -5890,16 +6088,23 @@ def download_rle_ondemand( self, rle_sig_source ):
     pod = int( words_tmp[2] );
     print("Downloading RLE HubPod (%d,%d)" % (hub,pod) );
     download_rle_ondemand_hubpod( self, hub, pod );
+  stop_time = self.pygame.time.get_ticks();
+  delta_time = stop_time - start_time;
+  log( self, ["download_rle_ondemand() : Completed in %d mS.\n" % delta_time]);
   return;
 
 def download_rle_ondemand_hubpod( self, hub, pod ):
-  self.pygame.display.set_caption(\
-    self.name+" "+self.vers+" "+self.copyright+" download_rle_ondemand_hubpod()..");
-  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   filename = "sump_rle_ram.txt";
   from os import path;
   file_path = os.path.abspath( self.vars["sump_path_ram"] );
   filename  = os.path.join( file_path, filename );
+  if not os.path.exists( filename ):
+    return;
+
+  self.pygame.display.set_caption(\
+    self.name+" "+self.vers+" "+self.copyright+" download_rle_ondemand_hubpod()..");
+  self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
+
   rle_ram_list = file2list( filename );
   rle_ram_updated = False;
   new_rle_ram_list = sump_rlepod_download(self, hub_num=hub, pod_num=pod, rle_ram_list=rle_ram_list );
@@ -5915,10 +6120,8 @@ def download_rle_ondemand_hubpod( self, hub, pod ):
     log( self,[ "Changes to %s" % file_in ]);
     log( self,[ "Updating %s" % file_out ]);
     create_sump_digital_rle(self,  file_in, file_out );
-
-#   self.pygame.display.set_caption(\
-#     self.name+" "+self.vers+" "+self.copyright+" Populating user signals..");
     populate_signal_values_from_samples( self );
+
   self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+"");
   self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   return;
@@ -5926,6 +6129,7 @@ def download_rle_ondemand_hubpod( self, hub, pod ):
 # Called by cmd_save_pza()
 def download_rle_ondemand_all( self ):
   log( self,[ "download_rle_ondemand_all()"]);
+  start_time = self.pygame.time.get_ticks();
   filename = "sump_rle_ram.txt";
   from os import path;
   file_path = os.path.abspath( self.vars["sump_path_ram"] );
@@ -5958,6 +6162,9 @@ def download_rle_ondemand_all( self ):
   self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright);
   self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   populate_signal_values_from_samples( self );
+  stop_time = self.pygame.time.get_ticks();
+  delta_time = stop_time - start_time;
+  log( self, ["download_rle_ondemand_all() : Completed in %d mS.\n" % delta_time]);
   return;
 
 
@@ -6119,7 +6326,7 @@ def sump_read_config( self ):
   ana_post_trig   = self.sump.rd( self.sump.cmd_wr_ana_post_trig_len    )[0];
   dig_post_trig   = self.sump.rd( self.sump.cmd_wr_dig_post_trig_len    )[0];
   user_ctrl       = self.sump.rd( self.sump.cmd_wr_user_ctrl            )[0];
-  user_stim       = self.sump.rd( self.sump.cmd_wr_user_stim            )[0];
+# user_stim       = self.sump.rd( self.sump.cmd_wr_user_stim            )[0];
   ana_rec_config  = self.sump.rd( self.sump.cmd_wr_record_config        )[0];
   ana_rec_profile = self.sump.rd( self.sump.cmd_rd_record_profile       )[0];
   trig_type       = self.sump.rd( self.sump.cmd_wr_trig_type            )[0];
@@ -6183,7 +6390,7 @@ def sump_read_config( self ):
   a['ana_post_trig_samples'] =  ana_post_trig;
   a['dig_post_trig_samples'] =  dig_post_trig;
   a['user_ctrl']             =  user_ctrl;
-  a['user_stim']             =  user_stim;
+# a['user_stim']             =  user_stim;
   a['ana_record_config']     =  ana_rec_config;
   a['ana_record_profile']    =  ana_rec_profile;
   a['trig_type']             =  trig_type;
@@ -6375,7 +6582,6 @@ def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
   a+=[ ("# trig_src_hub     = %03x" % ( trig_src_hub       ) )];
   a+=[ ("# trig_src_pod     = %08x" % ( trig_src_pod       ) )];
 
-  import time;
   now = time.time()
   means = time.ctime(now)
   a+=[ ("# download_time    = %08x"   % (int( now ) ) )];
@@ -7554,6 +7760,7 @@ class sump3_hw:
     self.cmd_rd_record_profile       = 0x13;
     self.cmd_rd_trigger_src          = 0x14;
     self.cmd_rd_view_rom_kb          = 0x15;
+#   self.cmd_rd_user_stat            = 0x16;
 
     self.cmd_wr_user_ctrl            = 0x20;
     self.cmd_wr_record_config        = 0x21;
@@ -7569,7 +7776,8 @@ class sump3_hw:
     self.cmd_wr_ram_rd_ptr           = 0x29;
     self.cmd_wr_dig_post_trig_len    = 0x2a;
     self.cmd_wr_ram_rd_page          = 0x2b;
-    self.cmd_wr_user_stim            = 0x2c;
+#   self.cmd_wr_user_stim            = 0x2c;
+#   self.cmd_wr_user_addr            = 0x2d;
 
     self.cmd_rd_rle_hub_config        = 0x30;# Number of RLE Hubs
     self.cmd_rd_rle_pod_config        = 0x31;# Number of RLE Pods for selected Hub
@@ -7578,6 +7786,10 @@ class sump3_hw:
     self.cmd_rd_rle_pod_trigger_src   = 0x34;# Pod Instance of trigger source
     self.cmd_wr_rle_pod_trigger_width = 0x35;
     self.cmd_rd_rle_hub_ck_freq       = 0x36;# u12.20 MHz for selected Hub
+    self.cmd_wr_rle_hub_user_addr     = 0x37;# user_addr[31:0]
+    self.cmd_wr_rle_hub_user_wr_d     = 0x38;# user_wr_d[31:0]
+    self.cmd_rd_rle_hub_user_rd_d     = 0x39;# user_rd_d[31:0]
+    self.cmd_rd_rle_hub_hw_cfg        = 0x3a;
     self.cmd_rd_rle_hub_instance      = 0x3c;
     self.cmd_rd_rle_hub_name_0_3      = 0x3d;
     self.cmd_rd_rle_hub_name_4_7      = 0x3e;
@@ -7595,8 +7807,8 @@ class sump3_hw:
     self.rle_pod_addr_ram_data        = 0x09;# RAM Data[31:0] from Page Mux    
     self.rle_pod_addr_pod_ram_cfg     = 0x0A;# Num of Events, Addr Bits, TimeStamp bits
     self.rle_pod_addr_pod_user_ctrl   = 0x0B;# Ext user control bits           
-    self.rle_pod_addr_pod_user_stim   = 0x0C;# Ext user stimulus bits           
-    self.rle_pod_addr_pod_user_stat   = 0x0D;# Ext user status bits           
+#   self.rle_pod_addr_pod_user_stim   = 0x0C;# Ext user stimulus bits           
+#   self.rle_pod_addr_pod_user_stat   = 0x0D;# Ext user status bits           
     self.rle_pod_addr_triggerable     = 0x0E;# Triggerable Bits 0-31
     self.rle_pod_addr_pod_trigger_src = 0x0F;# Triggger Source                
     self.rle_pod_addr_pod_view_rom_kb = 0x10;# Size of View ROM in 1kb units  
@@ -7733,7 +7945,9 @@ class sump3_hw:
     self.cfg_dict['dig_ram_width']   = ( dig_ram_data  & 0xFF000000 ) >> 24;
     self.cfg_dict['tick_freq']       =  float(freq_data) / float( 0x00100000 );# u12.20
 
-    self.view_rom_list = [];
+    self.view_rom_list = [];    # Gets populated with View ROM Contents from Hardware
+    self.no_view_rom_list = []; # Gets populated with Hub+Pod names and number of signal
+    # If the Sump3 core has a view rom, process it
     if self.cfg_dict['view_rom_en'] == 1:
       rom_byte_list = self.rd_core_view_rom();
       self.view_rom_list += self.parse_view_rom( rom_byte_list=rom_byte_list, hub=0, pod=0, inst=0 );
@@ -7747,13 +7961,17 @@ class sump3_hw:
 #     print("  RLE Hub #%d has %d Pods" % ( i, rle_pod_cnt ) );
 
       hub_instance  = self.rd( self.cmd_rd_rle_hub_instance)[0];
-      hub_name_0_3  = self.rd( self.cmd_rd_rle_hub_name_0_3)[0];
-      hub_name_4_7  = self.rd( self.cmd_rd_rle_hub_name_4_7)[0];
-      hub_name_8_11 = self.rd( self.cmd_rd_rle_hub_name_8_11)[0];
-      hub_name =  self.dword_to_ascii( hub_name_0_3 );
-      hub_name += self.dword_to_ascii( hub_name_4_7 );
-      hub_name += self.dword_to_ascii( hub_name_8_11 );
-      hub_name = hub_name.replace(" ","");
+      hub_hw_cfg    = self.rd( self.cmd_rd_rle_hub_hw_cfg)[0];
+      if ( hub_hw_cfg & 0x00000001 ) == 0:
+        hub_name_0_3  = self.rd( self.cmd_rd_rle_hub_name_0_3)[0];
+        hub_name_4_7  = self.rd( self.cmd_rd_rle_hub_name_4_7)[0];
+        hub_name_8_11 = self.rd( self.cmd_rd_rle_hub_name_8_11)[0];
+        hub_name =  self.dword_to_ascii( hub_name_0_3 );
+        hub_name += self.dword_to_ascii( hub_name_4_7 );
+        hub_name += self.dword_to_ascii( hub_name_8_11 );
+        hub_name = hub_name.replace(" ","");
+      else:
+        hub_name = "%d" % i;
 
       # Instances are only for when you have multiple instances of same name
       hub_full_name = "%d.%d.%s" % (i,hub_instance,hub_name);
@@ -7771,14 +7989,19 @@ class sump3_hw:
         self.bd.wr( self.addr_ctrl, [ 0x33 ] );
         dword = self.bd.rd( self.addr_data )[0];
         pod_hw_cfg    = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_hw_cfg )[0];
+        pod_ram_cfg   = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_ram_cfg )[0];
+        pod_num_data_bits = ( pod_ram_cfg & 0x00FFFF00 ) >> 8;
         pod_instance  = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_instance  )[0];
-        pod_name_0_3  = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_name_0_3  )[0];
-        pod_name_4_7  = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_name_4_7  )[0];
-        pod_name_8_11 = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_name_8_11 )[0];
-        pod_name =  self.dword_to_ascii( pod_name_0_3 );
-        pod_name += self.dword_to_ascii( pod_name_4_7 );
-        pod_name += self.dword_to_ascii( pod_name_8_11 );
-        pod_name = pod_name.replace(" ","");
+        if ( pod_hw_cfg & 0x00000020 ) == 0:
+          pod_name_0_3  = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_name_0_3  )[0];
+          pod_name_4_7  = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_name_4_7  )[0];
+          pod_name_8_11 = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_name_8_11 )[0];
+          pod_name =  self.dword_to_ascii( pod_name_0_3 );
+          pod_name += self.dword_to_ascii( pod_name_4_7 );
+          pod_name += self.dword_to_ascii( pod_name_8_11 );
+          pod_name = pod_name.replace(" ","");
+        else:
+          pod_name = "%d" % j;# pod_name_en parameter was 0
         pod_full_name = "%d.%d.%s" % (j,pod_instance,pod_name);
         if pod_instance != 0:
           name = pod_full_name;
@@ -7787,10 +8010,56 @@ class sump3_hw:
         pod_list += [ hub_full_name+"."+pod_full_name ];
 
         print("    RLE Hub %d, Pod #%d %s : HW Rev = %02x" % (i,j, name, ((pod_hw_cfg & 0xFF000000)>>24)));
+        # If this pod has a view rom, process it
         if ( pod_hw_cfg & 0x00000002 ) != 0:
           rom_byte_list = self.rd_pod_view_rom( hub=i,pod=j );
-#         self.view_rom_list += self.parse_view_rom( rom_byte_list=rom_byte_list, hub=i, pod=j );
           self.view_rom_list += self.parse_view_rom( rom_byte_list=rom_byte_list, hub=i, pod=j, inst=pod_instance );
+
+        # Generate a fake view rom with no signal names in case there is no rom at all
+        # Use the embedded hub+pod names for signal name
+        # TODO: This doesn't handle pod_name_en == 0 . Should replace name with index number
+        # TODO: This doesn't handle instance numbers with same name + generates
+        norom_view_bits   = ( pod_hw_cfg & 0x00000100 ) != 0;
+        norom_view_bytes  = ( pod_hw_cfg & 0x00000200 ) != 0;
+        norom_view_words  = ( pod_hw_cfg & 0x00000400 ) != 0;
+        norom_view_dwords = ( pod_hw_cfg & 0x00000800 ) != 0;
+        view_name = hub_name + "." + pod_name;
+        self.no_view_rom_list += [ "create_view %s" % view_name ];
+        self.no_view_rom_list += [ "create_group %s" % view_name ];
+
+        if norom_view_bytes == 1 or norom_view_words == 1 or norom_view_dwords == 1:
+          if norom_view_bytes == 1:
+            entity_size = 8;
+          elif norom_view_words == 1:
+            entity_size = 16;
+          elif norom_view_dwords == 1:
+            entity_size = 32;
+          bits_remaining = pod_num_data_bits;
+          start_index = 0;
+          rip_list = [];
+          while ( bits_remaining > 0 ):
+            if ( bits_remaining < entity_size ):
+              stop_index = start_index + bits_remaining -1;
+            else:
+              stop_index = start_index + entity_size -1;
+            if start_index == stop_index:
+              sig_name = view_name.replace(".","_") + "[%d]" % ( stop_index );
+              rip_list += [ "create_signal %s -source %s[%d]" % ( sig_name, view_name, stop_index )];
+            else:
+              sig_name = view_name.replace(".","_") + "[%d:%d]" % ( stop_index, start_index );
+              rip_list += [ "create_signal %s -source %s[%d:%d]" % ( sig_name, view_name, stop_index, start_index )];
+            bits_remaining -= entity_size;
+            start_index += entity_size;
+          print( rip_list );
+          rip_list.reverse();# Place top numbers on top
+          self.no_view_rom_list += rip_list;
+        # Default to bits
+        else:
+          for k in range(0, pod_num_data_bits ):
+            sig_name = view_name.replace(".","_") + "_" + "%d" % k;
+            self.no_view_rom_list += [ "create_signal %s -source %s[%d]" % ( sig_name, view_name, k) ];
+        self.no_view_rom_list += [ "end_group", "end_view", "add_view" ];
+
       hub_list += [ pod_list ];
 
     self.rle_hub_pod_dict = {};
@@ -7801,12 +8070,157 @@ class sump3_hw:
         # Make a name only dictionary like this foo["clk_100.u2_pod"] = (1,0)
         words = each_pod.split(".") + [None] * 8; # Avoid IndexError
         self.rle_hub_pod_dict[ words[2]+"."+words[5] ] = (i,j);
+
+        # For generates with instances, add "clk_100.u2_pod.0]
+        self.rle_hub_pod_dict[ words[2]+"."+words[5]+"."+words[4] ] = (i,j);
     self.rle_hub_pod_list = hub_list;
 
-#   for each in self.view_rom_list:
-#     print( each );
+    list2file("vrl.txt", self.view_rom_list );
+    list2file("nvrl.txt", self.no_view_rom_list );
+
+    if len( self.view_rom_list ) == 0:
+      self.view_rom_list = self.no_view_rom_list[:];
+    else:
+      self.merge_view_rom_no_view_rom();
+
+#   dump_list = [];
+#   for each in self.rle_hub_pod_list:
+#     dump_list += [str(each)];
+#   list2file("rle_hub_pod_list.txt", dump_list );
+
+    self.expand_view_rom_generates();
+    #HERE
 
     return True;
+
+# expand_view_rom_generates(): If generates are used for multiple pod 
+# instances, support placing a "*" in the View ROM that gets expanded
+# out to each generate instance
+#
+# self.rle_hub_pod_list
+#    __ Index      ___ Index
+#   / _ Generate  / __ Generate Instance
+#  / /           / /
+# '0.0.ck100_hub.0.0.u0_pod',
+# '0.0.ck100_hub.1.0.u1_pod', 
+# '0.0.ck100_hub.2.1.u1_pod', 
+# '0.0.ck100_hub.3.2.u1_pod', 
+# '0.0.ck100_hub.4.3.u1_pod'
+# WARNING: This doesn't handle generate instanced on hubs, only pods!!
+# When generates are used, the view ROM can specify ".*" for the instance
+# and this routine will replace all ".*" with mu
+  def expand_view_rom_generates( self ):
+    parsing_jk = False;
+    org_list = self.view_rom_list[:];
+    new_list = [];
+    top_type = "";
+    group_cnt = 0;
+    for each in org_list:
+#     if ( "*" in each and "create_view" in each ):
+#     if ( not parsing_jk and "*" in each and "create_signal" in each ):
+#     if ( not parsing_jk and "*" in each and "create_group" in each ):
+      if ( not parsing_jk and "*" in each ):
+        top_type = "";
+        parsing_jk = True;
+        parse_list = []; 
+        if ( "create_view" in each ):
+          top_type = "end_view";
+        elif ( "create_group" in each ):
+          top_type = "end_group";
+          group_cnt = 0;
+        else:
+          log( self,["ERROR-5552368 : Invalid '*' in: %s" % ( each ) ]);
+        print("top_type == %s" % top_type );
+      if not parsing_jk:
+        new_list += [ each ];
+      else:
+        parse_list += [each ];
+#HERE
+#       if ( "end_view" in each ):
+#       if ( "end_source" in each ):
+#       if ( "end_source" in each or "end_view" in each ):
+        if ( "create_group" in each and top_type == "end_group" ):
+          group_cnt += 1;# Keep track of group hierarchy
+          print("group_cnt = %d" % group_cnt );
+
+        if ( top_type in each and top_type == "end_group" ):
+          group_cnt -= 1;# Keep track of group hierarchy
+          print("group_cnt = %d" % group_cnt );
+
+        if ( top_type in each and top_type != "" and group_cnt == 0 ):
+          print("Oy! %s" % each )
+
+          parsing_jk = False;
+          # Iterate the view and look for:
+          # create_signal u1_pod_e[0] -source ck100_hub.u1_pod.*[0]
+          # If found, iterate the self.rle_hub_pod_list and find any 
+          # matches. For each instance match, create a unique new view
+          # that replaces any ".*" with ".n" where n is the instance
+          # numbers.
+          found_jk = False;
+          match_list = [];
+          for each_line in parse_list:
+            if "create_signal" in each_line and ".*" in each_line and found_jk == False:
+              words = each_line.split(" ") + [None]*8;# Avoid IndexError
+              if words[2] == "-source":
+                hub_pod_rip = words[3];
+                words_hier = hub_pod_rip.split(".");
+                if "*" in words_hier[2]:
+                  hub_name = words_hier[0];
+                  pod_name = words_hier[1];
+                  found_jk = True; 
+          if found_jk:
+            generate_instance_list = [];
+#           print("----");
+            for each_hub_pod in self.rle_hub_pod_list:
+#             print("----:");
+#             print( each_hub_pod );
+              for each_each in each_hub_pod:
+#               print("----::");
+#               print( each_each );
+                words = each_each.split(".") + [None]*8;# Avoid IndexError
+                if words[2] == hub_name and words[5] == pod_name:
+                  generate_instance_list += [ words[4] ];
+            for each_generate_instance in generate_instance_list:
+              for each_line in parse_list:
+                new_line = each_line.replace("*", each_generate_instance );
+                new_list += [ new_line ];
+    
+#   list2file("new_list.txt", new_list );
+#   list2file("parse_list.txt", parse_list );
+    self.view_rom_list = new_list[:];
+    return;
+
+  # It's possible for a design to have a view rom, but also have some pods that
+  # aren't specified in that view rom. Search for these pods and merge
+  def merge_view_rom_no_view_rom( self ):
+    print("merge_view_rom_no_view_rom()");
+    no_view_list = [];
+    for each in self.no_view_rom_list:
+      words = each.strip().split() + [None] * 4;# Avoid IndexError
+      if words[0] == "create_view":
+        no_view_list += [ words[1] ];# ie "ck100_hub.u0_pod"
+    for each_view in no_view_list:
+      found = False;
+      for each in self.view_rom_list:
+        words = each.strip().split() + [None] * 4;# Avoid IndexError
+        if words[0] == "create_signal" and words[2] == "-source":
+          if each_view in words[3]:
+            found = True; break;
+      if not found:
+        print("appending synthetic view for %s" % each_view);
+        parse_jk = False;
+        for each in self.no_view_rom_list:
+          words = each.strip().split() + [None] * 4;# Avoid IndexError
+          if words[0] == "create_view" and words[1] == each_view:
+            parse_jk = True;
+          if parse_jk:
+            self.view_rom_list += [ each ];
+#           print( each );
+          if words[0] == "add_view":
+            parse_jk = False;
+    return;
+
 
 
   # A View ROM starts with a 0xF0 "ROM Start" byte and ends with 0xE0 "ROM End" byte 
@@ -7958,7 +8372,7 @@ class sump3_hw:
       pod = int( words[2], 16 );
       self.rom_signal_source = "digital_rle[%d][%d]" % ( hub, pod );
     elif words[0] == "f4":
-      self.rom_signal_source = words[1];# Must be "analog_ls","digital_ls","digital_hs"
+      self.rom_signal_source = words[1];# Must be "analog_ls","digital_ls","digital_hs", or "u_hub.u_pod"
 #     if "." in words[1]:
 #       # self.rle_hub_pod_dict = {};# Lookup where key is "hub_name.pod_name" and returns (hub_i,pod_j)
 #       if ( self.sump.rle_hub_pod_dict.get( words[1] ) == None ):
@@ -7969,9 +8383,16 @@ class sump3_hw:
 #         self.rom_signal_source = "digital_rle[%d][%d]" % ( hub, pod );
 #     else:
 #       self.rom_signal_source = words[1];# Must be "analog_ls","digital_ls","digital_hs"
+    elif words[0] == "fd":
+      txt = txt_line.replace("fd ","");# bd_shell command
 
     elif words[0] == "fe":
-      txt = "apply_attribute " + words[1];
+#     txt = "apply_attribute " + words[1];
+      attrib_list = words[1].split(',');
+      txt = "";
+      for each_attrib in attrib_list:
+        txt += "apply_attribute " + each_attrib + " ";
+       
     elif words[0] == "f6":
       i = int(words[1]+words[2],16);
       txt = "create_signal " + words[3] + " -source " + src_name + ("[%d]" % i);
@@ -8014,7 +8435,8 @@ class sump3_hw:
 #             ascii_txt = ascii_txt.replace(a,b);
 
 #         txt = self.view_rom_line( cmd_txt + " " + ascii_txt, hub, pod );
-          txt = self.view_rom_line( cmd_txt + " " + ascii_txt, hub, pod, inst );
+#         txt = self.view_rom_line( cmd_txt + " " + ascii_txt, hub, pod, inst );
+          txt = self.view_rom_line( cmd_txt + ascii_txt, hub, pod, inst );
 #         rts += [ txt ];
           # if "apply_attribute" in txt, we need to apply it to last "create_*" line
           if "apply_attribute" in txt:
@@ -8085,18 +8507,63 @@ class sump3_hw:
 ##############################################################################
 # functions to send Backdoor commands to BD_SERVER.PY over TCP Sockets
 class Backdoor:
-  def __init__ ( self, ip, port  ):
+  def __init__ ( self, ip, port, aes_key, aes_authentication ):
+    self.aes     = None;
+    self.aes_e2e = False;
     try:
       import socket;
     except:
       raise RuntimeError("ERROR: socket is required");
     try:
-      self.sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM);
+      self.sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM);
       self.sock.connect( ( ip, port ) );# "localhost", 21567
       self.sock.settimeout(5); # Dont wait forever
+
+      # Authentication Encryption only when Client and Server are different machines
+      # End-2-End Encryption only when Server requests it
+      laddr = self.sock.getsockname();# Server ("IP",port)
+      raddr = self.sock.getpeername();# Client ("IP",port)
+#     if laddr[0] != raddr[0] and aes_authentication == 1:
+      if raddr[0] != "127.0.0.1" and aes_authentication == 1:
+        try:
+          from aes import AES;
+          self.aes = AES( aes_key );
+          self.aes_e2e = True;# Turn on Encryption for Authentication
+          self.tx_tcp_packet("opensesame\n");  # Request for Authentication
+          challenge = self.rx_tcp_packet();    # Wait for Challenge Question
+          words = " ".join(challenge.split()).split(' ') + [None] * 2;
+          if words[0] == "challenge":
+            force_rej = 0;# Make this 1 to force a rejection
+            self.tx_tcp_packet("response %08x\n" % (int(words[1],10)+force_rej));# Hex resp
+            greetings = self.rx_tcp_packet();# Wait for "Greetings, ..." ACK back
+            if "Greetings," in greetings:
+              print( greetings );
+              if "e2e" in greetings:
+                print("AES-256 End-2-End Encryption is required by bd_server.py.");
+                self.aes_e2e = True;
+              else:
+                self.aes_e2e = False;
+            else:
+              print("ERROR: Authentication failed with %s" % greetings );
+              self.sock = None;
+          else:
+            print("ERROR: %s was not a challenge" % words[0] );
+            self.sock = None;
+        except:
+          print("ERROR: Unknown AES Install Failure. Missing aes.py perhaps?" );
+          self.sock = None;
+      else:
+        print("AES Authentication not required.");
     except:
-#     raise RuntimeError("ERROR: Unable to open Socket!! ")
+      print("ERROR: Unable to open Socket %d on %s" % ( port, ip ) );
       self.sock = None;
+      try:
+        (ip_name, ip_null, ip_num ) = socket.gethostbyaddr( ip );
+        print("ERROR: Computer %s at %s located but connection to Port %d refused!!" % \
+               ( ip_name, ip_num,port ) );
+        print("Either bd_server.py has not been started or a firewall is blocking the port.");
+      except:
+        print("ERROR: Server at %s not found!" % ( ip ) );
       return;
   def close ( self ):
     self.sock.close();
@@ -8127,7 +8594,11 @@ class Backdoor:
       cmd = "r";# Normal Read : Single or Burst with incrementing address
     else:
       cmd = "k";# Read Multiple DWORDs from single address
-    payload = cmd + " %08x %08x\n" % (addr,(num_dwords-1));# 0=1DWORD,1=2DWORDs
+#   payload = cmd + " %08x %08x\n" % (addr,(num_dwords-1));# 0=1DWORD,1=2DWORDs
+    if num_dwords == 1:
+      payload = cmd + " %08x\n" % (addr);# 0=1DWORD,1=2DWORDs
+    else:
+      payload = cmd + " %08x %08x\n" % (addr,(num_dwords-1));# 0=1DWORD,1=2DWORDs
     self.tx_tcp_packet( payload );
     payload = self.rx_tcp_packet().rstrip();
     dwords = payload.split(' ');
@@ -8139,6 +8610,8 @@ class Backdoor:
   def tx_tcp_packet( self, payload ):
     # A Packet is a 8char hexadecimal header followed by the payload.
     # The header is the number of bytes in the payload.
+    if self.aes_e2e == True:
+      payload = self.aes.encrypt(payload);
     header = "%08x" % len(payload);
     bin_data = (header+payload).encode("utf-8");# String to ByteArray
     self.sock.send( bin_data );
@@ -8156,6 +8629,8 @@ class Backdoor:
     while ( len(payload) < payload_len ):
       bin_data = self.sock.recv(1024);
       payload += bin_data.decode("utf-8");# ByteArray to String
+    if self.aes_e2e == True:
+      payload = self.aes.decrypt(payload);
     return payload;
 
 
@@ -8172,6 +8647,10 @@ def init_globals( self ):
   if ( self.os_sys == "Darwin" ):
     self.os_sys = "Linux";# Mac Support
     self.os_platform ="mac";
+  if ( self.os_sys == "Windows" ):
+    title = "sump3.py "+self.vers+" "+self.copyright;
+    os.system("title "+title );# Give DOS-Box a snazzy title
+
   
   self.name = "SUMP3 Mixed-Signal Logic Analyzer"; 
   self.background_surface = None;
@@ -8314,6 +8793,8 @@ def init_vars( self, file_ini ):
   vars["bd_protocol"               ] = "poke";
   vars["bd_server_ip"              ] = "localhost";
   vars["bd_server_socket"          ] = "21567";
+  vars["aes_key"                   ] = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+  vars["aes_authentication"        ] = "0";
   vars["uut_name"                  ] =  None;
 # vars["uut_rev"                   ] = "00_00";
   vars["sump_uut_addr"             ] = "00000098";
@@ -8330,7 +8811,7 @@ def init_vars( self, file_ini ):
   vars["sump_trigger_analog_level" ] = "100.0";
   vars["sump_trigger_analog_ch"    ] = "0";
   vars["sump_user_ctrl"            ] = "00000000";
-  vars["sump_user_stim"            ] = "00000000";
+# vars["sump_user_stim"            ] = "00000000";
   vars["sump_path_ram"             ] = "sump_ram";
   vars["sump_path_uut"             ] = "sump_uut";
 # vars["sump_hs_clock_freq"        ] = "80.0";
@@ -8386,6 +8867,7 @@ def init_vars( self, file_ini ):
     "screen_x", "screen_y","screen_save_position",
     "screen_width","screen_height", "screen_windows","screen_console_height",
     "bd_connection","bd_protocol","bd_server_ip","bd_server_socket",
+    "aes_key", "aes_authentication",
     "sump_script_startup","sump_script_triggered","sump_script_shutdown",
     "sump_path_ram","sump_path_uut",
     "sump_path_jpg","sump_path_png","sump_path_bmp","sump_path_pza","sump_path_vcd",
@@ -8404,7 +8886,6 @@ def init_vars( self, file_ini ):
  ];
   
   # Now load an existing ini file and overwrite any defaults
-  import os;
   if os.path.exists( file_ini ):
     file_in   = open( file_ini, 'r' );
     file_list = file_in.readlines();
@@ -8642,6 +9123,11 @@ def cmd_end_group( self, words ):
 #####################################
 def cmd_create_signal( self, words ):
   log( self, ["create_signal()"] );
+  self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" create_signal "+words[1]);
+  start_time = self.pygame.time.get_ticks();
+# pygame.time.wait(1);# time in mS. 
+# pygame.display.update();# Now off to the GPU
+#HERE
   rts = [];
   self.last_create_type = "signal";
 # rts += [ str( words ) ];
@@ -8664,17 +9150,20 @@ def cmd_create_signal( self, words ):
     self.group_stack_list += [ my_sig ];
 
   # digital_rle source may be specified as either "digital_rle[0][1][2]" or 
-  #  "hub_name.pod_name[2]
+  #  "hub_name.pod_name[2] or "hub_name.pod_name.0[2]" with generate instance
   # If specified by name, do a lookup and convert to number
   if my_sig.source != None:
     if "." in my_sig.source:
       # self.rle_hub_pod_dict = {};# Lookup where key is "hub_name.pod_name" and returns (hub_i,pod_j)
       (hubpod_name, rip_num ) = my_sig.source.split("[");
+
       if ( self.sump.rle_hub_pod_dict.get( hubpod_name  ) != None ):
         (hub,pod) = self.sump.rle_hub_pod_dict[ hubpod_name ];
         my_sig.source = "digital_rle[%d][%d][%s" % ( hub, pod, rip_num );
-      else:
-        print("WARNING: Strange source key %s" % my_sig.source );
+#     else:
+#       print("WARNING: Strange source key %s" % my_sig.source );
+#       for key in self.sump.rle_hub_pod_dict:
+#         print("%s = %s" % ( key, self.sump.rle_hub_pod_dict[key] ) );
 
   # Count the number of bits for the digital signals
   if my_sig.source != None:
@@ -8725,6 +9214,9 @@ def cmd_create_signal( self, words ):
 
   signal_list_modified(self);
 # self.refresh_waveforms = True;
+  stop_time = self.pygame.time.get_ticks();
+  render_time = stop_time - start_time;
+  log( self, ["cmd_create_signal() Time = %d mS " % (render_time)] );
   return rts;
 
 
@@ -8822,10 +9314,14 @@ def signal_attribute_inheritance( self, my_sig ):
 # Do some one-time house keeping whenever the signal list has changed
 # First up is calculating the hierarchy level of each signal
 def signal_list_modified( self ):
+# start_time = self.pygame.time.get_ticks();
   # Calculate the hierarchy level for each signal. We do this by counting the number
   # of parents, grandparents, etc.
   for each_sig in self.signal_list:
     each_sig.hier_level = recursive_parent_count( self, each_sig, 0 );
+# stop_time = self.pygame.time.get_ticks();
+# render_time = stop_time - start_time;
+# log( self, ["signal_list_modified() Time = %d mS " % (render_time)] );
   return;
 
 # WARNING: This won't work with multiple groups of the same name
@@ -8844,7 +9340,6 @@ def recursive_parent_count( self, my_sig, count ):
 
 #####################################
 def cmd_debug( self, words ):
-##HERE2
 # print( self.window_list );
 # for (i,each_win) in enumerate( self.window_list ):
 #   print("---------");
@@ -8959,8 +9454,9 @@ def cmd_remove_signal( self, words ):
         each_sig.selected = False;
         signal_list_names += [ each_sig.name ];
   else:
-    signal_list_names = [ each.name for each in self.signal_list ];# all the names
-    signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+#   signal_list_names = [ each.name for each in self.signal_list ];# all the names
+#   signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+    signal_list_names = [ words[1] ];
   for each_name in signal_list_names:
     for each_sig in self.signal_list:
       if each_name == each_sig.name:
@@ -8982,8 +9478,9 @@ def cmd_hide_signal( self, words ):
         each_sig.selected = False;
         signal_list_names += [ each_sig.name ];
   else:
-    signal_list_names = [ each.name for each in self.signal_list ];# all the names
-    signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+#   signal_list_names = [ each.name for each in self.signal_list ];# all the names
+#   signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+    signal_list_names = [ words[1] ];
   for each_name in signal_list_names:
     for each_sig in self.signal_list:
       if each_name == each_sig.name:
@@ -9004,8 +9501,9 @@ def cmd_show_signal( self, words ):
         each_sig.selected = False;
         signal_list_names += [ each_sig.name ];
   else:
-    signal_list_names = [ each.name for each in self.signal_list ];# all the names
-    signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+#   signal_list_names = [ each.name for each in self.signal_list ];# all the names
+#   signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+    signal_list_names = [ words[1] ];
   for each_name in signal_list_names:
     for each_sig in self.signal_list:
       if each_name == each_sig.name:
@@ -9045,8 +9543,9 @@ def cmd_mask_toggle_signal( self, words ):
 # Given a signal name, apply True to visible attribute
 def cmd_add_signal( self, words ):
   rts = [];
-  signal_list_names = [ each.name for each in self.signal_list ];# all the names
-  signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+# signal_list_names = [ each.name for each in self.signal_list ];# all the names
+# signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+  signal_list_names = [ words[1] ];
   for each_name in signal_list_names:
     for each_sig in self.signal_list:
       if each_name == each_sig.name:
@@ -9067,8 +9566,9 @@ def cmd_expand_group( self, words ):
         each_sig.selected = False;
         signal_list_names += [ each_sig.name ];
   else:
-    signal_list_names = [ each.name for each in self.signal_list ];# all the names
-    signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+#   signal_list_names = [ each.name for each in self.signal_list ];# all the names
+#   signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+    signal_list_names = [ words[1] ];
   for each_name in signal_list_names:
     for each_sig in self.signal_list:
       if each_name == each_sig.name:
@@ -9079,6 +9579,7 @@ def cmd_expand_group( self, words ):
 #####################################
 # Given a group name, find the signal object that matches and collapse it
 def cmd_collapse_group( self, words ):
+  print("cmd_collapse_group() %s" % words );
   rts = [];
   if words[1] == None:
     signal_list_names = [];
@@ -9087,9 +9588,12 @@ def cmd_collapse_group( self, words ):
         each_sig.selected = False;
         signal_list_names += [ each_sig.name ];
   else:
-    signal_list_names = [ each.name for each in self.signal_list ];# all the names
-    signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+#   signal_list_names = [ each.name for each in self.signal_list ];# all the names
+#   signal_list_names = fnmatch.filter(signal_list_names,words[1] );# filtered names
+# fnmatch.filter is only for files and doesnt support names like foo[1:0]
+    signal_list_names = [ words[1] ];
   for each_name in signal_list_names:
+    print(each_name);
     for each_sig in self.signal_list:
       if each_name == each_sig.name:
 #       each_sig.collapsed = True;
@@ -9498,7 +10002,7 @@ def cmd_add_view_ontap( self, words, defer_gui_update = False ):
             if any( "-source digital_rle" in each2 for each2 in file_lines ):
               my_view.timezone = "rle";
             if my_view.timezone == None:
-              log(self,["WARNING: Inferring rle timezone even though '-source digital_rle' not found"]);
+#             log(self,["WARNING: Inferring rle timezone even though '-source digital_rle' not found"]);
               my_view.timezone = "rle";
               # NOTE: This happens if instead of "-source digital_rle[0][1][2]" it's -"source hub0.pod1[2]"
 
@@ -9533,11 +10037,14 @@ def cmd_add_view_ontap( self, words, defer_gui_update = False ):
                   each2 = each2.replace("["," ");
                   each2 = each2.replace("]"," ");
                   words = " ".join(each2.split()).split(' ');
-#                 print( words );
                   for (i,each_word) in enumerate( words ):
                     if each_word == "-source":
-                      hub_num = int( words[i+2] );
-                      pod_num = int( words[i+3] );
+                      try:
+                        hub_num = int( words[i+2] );
+                        pod_num = int( words[i+3] );
+                      except:
+                        if self.sump_connected:
+                          log(self,["ERROR-9680 : Invalid source reference : %s" % each2]);
 #                 print("Oy %s %d %d" % ( my_view.name, hub_num, pod_num ) );
                 if (hub_num,pod_num) not in my_view.rle_hub_pod_list:
                   my_view.rle_hub_pod_list += [ (hub_num,pod_num ) ];
@@ -9546,7 +10053,6 @@ def cmd_add_view_ontap( self, words, defer_gui_update = False ):
                   
 #   self.rle_hub_pod_list = [];# (hub,pod) tuples assigned to this view
 #   self.rle_hub_pod_user_ctrl_list = [];# (hub,pod,user_ctrl_list) tuples assigned to this view
-#HERE7
 
           log(self,["View %s rle_hub_pod_list = %s" % ( my_view.name, my_view.rle_hub_pod_list )]);
           log(self,["add_view_ontap() %s at %s" % ( my_view.name, my_view.filename )]);
@@ -9585,8 +10091,9 @@ def cmd_remove_view_ontap( self, words ):
                 del self.view_ontap_list[i];
   else:
     # Search the existing list and remove this view
-    view_ontap_name_list = [ each.name for each in self.view_ontap_list ];# list comprehension
-    view_name_list = fnmatch.filter(view_ontap_name_list,words[1] );
+#   view_ontap_name_list = [ each.name for each in self.view_ontap_list ];# list comprehension
+#   view_name_list = fnmatch.filter(view_ontap_name_list,words[1] );
+    view_name_list = [ words[1] ];
     for each_name in view_name_list:
       for ( i, each_view ) in enumerate( self.view_ontap_list ):
         if each_view.name == each_name:
@@ -9621,8 +10128,9 @@ def cmd_list_view_ontap( self, words ):
                 rts += ["list_view_ontap() %s %s" % ( my_view.name, my_view.filename) ];
   else:
     # Search the existing list and remove this view
-    view_ontap_name_list = [ each.name for each in self.view_ontap_list ];# list comprehension
-    view_name_list = fnmatch.filter(view_ontap_name_list,words[1] );
+#   view_ontap_name_list = [ each.name for each in self.view_ontap_list ];# list comprehension
+#   view_name_list = fnmatch.filter(view_ontap_name_list,words[1] );
+    view_name_list = [ words[1] ];
     for each_name in view_name_list:
       for ( i, each_view ) in enumerate( self.view_ontap_list ):
         if each_view.name == each_name:
@@ -9820,8 +10328,9 @@ def cmd_remove_view( self, words ):
     return ["ERROR: no window specified"];
 
   # Apply wildcard search and remove one or more views
-  win_view_name_list = [ each.name for each in self.window_list[win_num].view_list ];
-  view_name_list = fnmatch.filter( win_view_name_list, view_name);
+# win_view_name_list = [ each.name for each in self.window_list[win_num].view_list ];
+# view_name_list = fnmatch.filter( win_view_name_list, view_name);
+  view_name_list = [ view_name ];
   for view_name in view_name_list:
     # Remove the view from the specified window
     view_obj_list = [];
@@ -9841,21 +10350,9 @@ def cmd_remove_view( self, words ):
     # Note the you can't "del " multiple items, so build a new list
     lst_list = [];
     for each_sig in self.signal_list:
-#     if each_sig.view_name != view_name:
-# New 2023.12.06
       if each_sig.view_obj not in view_obj_list:
         lst_list += [ each_sig ];
     self.signal_list = lst_list;
-
-  # Remove the view from the specified window
-# for (i,each_view) in enumerate( self.window_list[win_num].view_list ):
-#   if each_view.name == view_name:
-#     del self.window_list[win_num].view_list[i];
-
-  # Also need to remove any signal associated with that view from the signal list
-# for (i,each_sig ) in enumerate( self.signal_list ):
-#   if each_sig.view_name == view_name:
-#     del self.signal_list[i];
 
   # If we just removed the last view, need to set timezone to None
   if len( self.window_list[win_num].view_list ) == 0:
@@ -9866,6 +10363,7 @@ def cmd_remove_view( self, words ):
   create_view_selections( self );
   self.refresh_waveforms = True;
   return rts;
+
 
 #####################################
 # unselect an object on <ESC> or right-mouse click.
@@ -9927,6 +10425,11 @@ def proc_remove_view( self ):
 def cmd_apply_view( self, words ):
   rts = [];
   view_name = words[1];
+  start_time = self.pygame.time.get_ticks();
+
+  if view_name == "*":
+    rts +=["WARNING: Wildcard apply_view not yet implemented."]
+    return rts;
 
   # 2024.01.11 Strange bug where having a signal selected before a cmd_apply_view results
   # in ALL of the user_ctrl arbitration not working. Can't explain it. 
@@ -9937,15 +10440,18 @@ def cmd_apply_view( self, words ):
 
   if self.window_selected != None:
     for each_view in self.view_ontap_list:
-      if each_view.name == view_name:
+#     if each_view.name == view_name:
+      if each_view.name == view_name or view_name == "*":
         update_file_vars( self, each_view.filename );
         cmd_list = file2list( each_view.filename );
         for cmd_str in cmd_list:
-          proc_cmd( self, cmd_str );
+          proc_cmd( self, cmd_str, quiet = True );
+        my_new_view_name = each_view.name;
         # Now that the view has been created, find the object in the window list
         for each_window in self.window_list:
           for each_applied_view in each_window.view_list:
-            if each_applied_view.name == view_name:
+#           if each_applied_view.name == view_name:
+            if each_applied_view.name == my_new_view_name:
               # This new view might have a user_ctrl_list, if so - rip through it and
               # remove ANY conflicting views from any window.
               new_user_ctrl_list = each_applied_view.user_ctrl_list
@@ -9972,13 +10478,17 @@ def cmd_apply_view( self, words ):
                     cmd_remove_view( self, ["remove_view",each_target_view.name,None,None] );
                     self.window_selected = org_i;
                     rts += ["Removing view %s due to user_ctrl conflict with view %s" \
-                             % ( each_target_view.name, view_name )];
+                             % ( each_target_view.name, my_new_view_name )];
+#                            % ( each_target_view.name, view_name )];
     # Locate any groups that are collapsed and recursively collapse on down
     for each_sig in self.signal_list:
       if each_sig.type == "group" and each_sig.collapsed == True:
         recursive_signal_collapse( self, parent = each_sig );
   else:
     rts += ["ERROR: no window specified"];
+  stop_time = self.pygame.time.get_ticks();
+  render_time = stop_time - start_time;
+  log( self, ["cmd_apply_view() Time = %d Seconds" % (render_time/1000)] );
   return rts;
 
 
@@ -10076,8 +10586,8 @@ def cmd_add_view( self, words, defer_gui_update = False ):
   timezone = self.window_list[win_num].timezone;
 
   # Refuse to add another view that has a different timezone
-  if my_view.timezone != timezone:
-    return ["ERROR: incompatible timezone %s != %s" % ( each_view.timezone, timezone )];
+# if my_view.timezone != timezone:
+#   return ["ERROR: incompatible timezone %s != %s" % ( each_view.timezone, timezone )];
 
   # Add this new view object to the window.view_list for the selected window.
   self.window_list[win_num].view_list += [ my_view ];
@@ -10545,7 +11055,6 @@ def cmd_save_vcd( self, words ):
             char_code += [ ch1+ch2+ch3+ch4 ];
 
     # Create boilerplate VCD header and footer
-    import time;
     now = time.time();
     means = time.ctime( now );
     if self.vars["uut_name"] == None:
@@ -10848,7 +11357,6 @@ def cmd_save_pic( self, words ):
 # Given a file_header ( like foo_ ), check for foo_0000, then foo_0001, etc
 # and return 1st available name.
 def make_unique_filename( self, file_header, file_ext ):
-  import os;
   num = 0;
   while ( True ):
     file_name = file_header + ( "%04d" % num ) + file_ext;
@@ -10863,7 +11371,6 @@ def make_unique_filename( self, file_header, file_ext ):
 # save_view view_name -window N
 # note if -window is omitted use the current selected window number.
 def cmd_save_view( self, words ):
-  import os;
   print("save_view()", words );
   rts = [];
   rts += [ "save_view()" ];
@@ -11020,6 +11527,7 @@ def assign_signal_attribute_by_name( self, new_signal, attribute, value ):
   elif attribute == "hid"             : attribute = "hidden";
   elif attribute == "h"               : attribute = "hidden";
   elif attribute == "col"             : attribute = "collapsed";
+  elif attribute == "clr"             : attribute = "color";
   elif attribute == "rng"             : attribute = "range";
   elif attribute == "u"               : attribute = "units";
   elif attribute == "upc"             : attribute = "units_per_code";
@@ -11027,6 +11535,7 @@ def assign_signal_attribute_by_name( self, new_signal, attribute, value ):
   elif attribute == "dpr"             : attribute = "divisions_per_range";
   elif attribute == "ou"              : attribute = "offset_units";
   elif attribute == "oc"              : attribute = "offset_codes";
+  elif attribute == "ta"              : attribute = "triggerable";
   elif attribute == "trg"             : attribute = "trigger";
   elif attribute == "tf"              : attribute = "trigger_field";
   elif attribute == "vo"              : attribute = "vertical_offset";
@@ -11226,7 +11735,6 @@ def cmd_write( self, words ):
 
 #####################################
 def cmd_source( self, words ):
-  import os;
   from os import path;
   rts = [];
 # search_path = self.vars["sump_path_scripts"];
@@ -11272,9 +11780,8 @@ def update_file_vars( self, file_name ):
 # and temporarily change to the UUTs path. Once we're done with the commands
 # we then switch back to the original cwd.
 def cmd_unix( self, words ):
-  import os;
-  import time;
   from os import path;
+  import os;
   rts = [];
   org_cwd = os.getcwd();
   if self.path_to_uut != None:
@@ -11398,19 +11905,19 @@ def cmd_assign_user_ctrl_var( self, words ):
 # process "sump_user_stim[3:0] = a"
 # Note that self.vars[key] are always strings
 # signal attribute assignments are not always string.
-def cmd_assign_user_stim_var( self, words ):
-  rts = []
-  if words[0][0:len("sump_user_stim")] == "sump_user_stim":
-    if "[" in words[0] and "]" in words[0]:
-      if words[1] == "=":
-        user_stim = int(words[2], 16);# new value to assign
-        bit_field = words[0].replace("sump_user_stim","");
-        old_user_stim = int( self.vars["sump_user_stim"],16);
-        (new_field,mask,bot_bit) = gen_bit_rip(bit_field);
-        # 123456A8    = ( 12345678 & FFFFFF0F  ) | (         A << 4       );
-        new_user_stim = ( old_user_stim & mask ) | ( user_stim << bot_bit );
-        self.vars["sump_user_stim"] = "%08x" % new_user_stim;
-  return rts;
+#def cmd_assign_user_stim_var( self, words ):
+#  rts = []
+#  if words[0][0:len("sump_user_stim")] == "sump_user_stim":
+#    if "[" in words[0] and "]" in words[0]:
+#      if words[1] == "=":
+#        user_stim = int(words[2], 16);# new value to assign
+#        bit_field = words[0].replace("sump_user_stim","");
+#        old_user_stim = int( self.vars["sump_user_stim"],16);
+#        (new_field,mask,bot_bit) = gen_bit_rip(bit_field);
+#        # 123456A8    = ( 12345678 & FFFFFF0F  ) | (         A << 4       );
+#        new_user_stim = ( old_user_stim & mask ) | ( user_stim << bot_bit );
+#        self.vars["sump_user_stim"] = "%08x" % new_user_stim;
+#  return rts;
 
 # Given "[7:4]" return the tuple ( 0x000000F0, 0xFFFFFF0F, 4 )
 # Given "[4]"   return the tuple ( 0x00000010, 0xFFFFFFEF, 4 )
@@ -11522,30 +12029,35 @@ def proc_key( self, event ):
     rts = proc_unselect(self);
 
   # K_TAB : Tab through Windows
-  elif event.key == pygame.K_TAB:
-    proc_cmd( self, "win_tab" );
-    rts = True;# Force a refresh
+# elif event.key == pygame.K_TAB:
+#   proc_cmd( self, "win_tab" );
+#   rts = True;# Force a refresh
 
   # K_TAB : Tab through Windows
   elif event.key == pygame.K_TAB:
-    proc_cmd( self, "win_tab" );
-    rts = True;# Force a refresh
+    if self.file_dialog == None and not self.cmd_console.visible:
+      proc_cmd( self, "win_tab" );
+      rts = True;# Force a refresh
 
   elif ( event.key == pygame.K_SLASH ):
-    if ( event.mod & pygame.KMOD_SHIFT ):
-      proc_cmd( self, "search_backward" );
-    else:
-      proc_cmd( self, "search_forward" );
+    if self.file_dialog == None and not self.cmd_console.visible:
+      if ( event.mod & pygame.KMOD_SHIFT ):
+        proc_cmd( self, "search_backward" );
+      else:
+        proc_cmd( self, "search_forward" );
   elif ( event.key == pygame.K_QUESTION ):
-    proc_cmd( self, "search_backward" );
+    if self.file_dialog == None and not self.cmd_console.visible:
+      proc_cmd( self, "search_backward" );
 
   # K_PAGEDOWN : 
   elif event.key == pygame.K_PAGEDOWN:
-    proc_cmd( self, "page_down" );
+    if self.file_dialog == None and not self.cmd_console.visible:
+      proc_cmd( self, "page_down" );
 
   # K_PAGEUP : 
   elif event.key == pygame.K_PAGEUP:
-    proc_cmd( self, "page_up" );
+    if self.file_dialog == None and not self.cmd_console.visible:
+      proc_cmd( self, "page_up" );
 
   # K_PAGEUP : Tab through Windows
 # elif event.key == pygame.K_PAGEUP:
@@ -11564,8 +12076,9 @@ def proc_key( self, event ):
 #   rts = True;# Force a refresh
 
   # K_LEFT : Pan Left
-  elif event.key == pygame.K_LEFT:
-    if self.file_dialog == None:
+  elif event.key == pygame.K_LEFT or event.key == pygame.K_a :
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 8;
@@ -11580,8 +12093,9 @@ def proc_key( self, event ):
       rts = False;# Selected window only refresh
 
   # K_RIGHT : Pan Right
-  elif event.key == pygame.K_RIGHT:
-    if self.file_dialog == None:
+  elif event.key == pygame.K_RIGHT or event.key == pygame.K_d :
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 8;
@@ -11596,8 +12110,9 @@ def proc_key( self, event ):
       rts = False;# Selected window only refresh
 
   # K_UP : Zoom In  
-  elif event.key == pygame.K_UP:
-    if self.file_dialog == None:
+  elif event.key == pygame.K_UP or event.key == pygame.K_w :
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 4;
@@ -11611,8 +12126,9 @@ def proc_key( self, event ):
     rts = False;# Selected window only refresh
 
   # K_DOWN : Zoom Out 
-  elif event.key == pygame.K_DOWN:
-    if self.file_dialog == None:
+  elif event.key == pygame.K_DOWN or event.key == pygame.K_s :
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 4;
@@ -11629,7 +12145,8 @@ def proc_key( self, event ):
   # K_DELETE : Make selected invisible ( remove from display )
   # same as CLI remove_signal 
   elif event.key == pygame.K_DELETE:
-    if self.file_dialog == None:
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       proc_cmd( self, "delete_signal" );
       rts = True;# Force a refresh
 #     for each_sig in self.signal_list:
@@ -11640,19 +12157,22 @@ def proc_key( self, event ):
 
   # K_INSERT : Make all signals visible and unhidden
   elif event.key == pygame.K_INSERT:
-    if self.file_dialog == None:
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       proc_cmd( self, "insert_signal" );
       rts = True;# Force a refresh
 
   # K_HOME : Make all signals visible and unhidden
   elif event.key == pygame.K_HOME:
-    if self.file_dialog == None:
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       proc_cmd( self, "insert_signal *" );
       rts = True;# Force a refresh
 
   # K_END : Toggle hidden attribute of selected
   elif event.key == pygame.K_END:
-    if self.file_dialog == None:
+    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
       proc_cmd( self, "hide_toggle_signal" );
       rts = True;# Force a refresh
 #     for each_sig in self.signal_list:
@@ -11692,7 +12212,7 @@ def proc_key( self, event ):
 
 
 #####################################
-def proc_cmd( self, cmd ):
+def proc_cmd( self, cmd, quiet = False ):
   self.cmd_history += [ cmd ];
 
   # Look for any variables ( like paths ) in cmd and replace if found.
@@ -11705,7 +12225,8 @@ def proc_cmd( self, cmd ):
         cmd = cmd.replace(target,self.vars[key]+ " ");
 
   # Don't log repetitive commands to bd_shell log as it slows UI.
-  self.dont_log_list = ["pan_left","pan_right","zoom_in","zoom_out"];
+  self.dont_log_list = ["pan_left","pan_right","zoom_in","zoom_out",
+                        "scroll_up","scroll_down"];
 
   cmd = cmd.replace("="," = ");
   cmd_list = cmd.split('#');# Support lines ending with comments
@@ -11713,7 +12234,8 @@ def proc_cmd( self, cmd ):
   words = " ".join(cmd.split()).split(' ') + [None] * 4;
   cmd_txt = words[0];
 
-  if ( self.cmd_console.visible == True and cmd not in self.dont_log_list ):
+# if ( self.cmd_console.visible == True and cmd not in self.dont_log_list ):
+  if ( self.cmd_console.visible == True and cmd not in self.dont_log_list and not quiet ):
     self.cmd_console.add_output_line_to_log( cmd ,is_bold=False, remove_line_break=False);
 # print(cmd);# Also use STDOUT
 # print("proc_cmd() %s" % cmd_txt );
@@ -11723,6 +12245,11 @@ def proc_cmd( self, cmd ):
   rts = [];
   if   cmd_txt == "refresh"           : cmd_txt = "gui_refresh";
   if   cmd_txt == "quit" or cmd_txt == "die" : cmd_txt = "exit";
+  if   cmd_txt == "ur"                : cmd_txt = "sump_user_read";
+  if   cmd_txt == "uw"                : cmd_txt = "sump_user_write";
+  if   cmd_txt == "user_read"         : cmd_txt = "sump_user_read";
+  if   cmd_txt == "user_write"        : cmd_txt = "sump_user_write";
+
   if   cmd_txt == "exit"              : shutdown(self); valid = True; sys.exit();
   elif cmd_txt == "source"            : rts = cmd_source(self, words ); valid = True;
   elif cmd_txt == "cd"                : rts = cmd_unix(self, words ); valid = True;
@@ -11748,6 +12275,9 @@ def proc_cmd( self, cmd ):
   elif cmd_txt == "sump_idle"         : cmd_sump_idle(self); valid = True;
   elif cmd_txt == "sump_reset"        : cmd_sump_reset(self); valid = True;
   elif cmd_txt == "sump_sleep"        : cmd_sump_sleep(self); valid = True;
+
+  elif cmd_txt == "sump_user_read"    : rts = cmd_sump_user_read(self, words ); valid = True;
+  elif cmd_txt == "sump_user_write"   : rts = cmd_sump_user_write(self, words ); valid = True;
 
   elif cmd_txt == "sump_set_trigs"    : rts = cmd_sump_set_trigs(self); valid = True;
   elif cmd_txt == "sump_clr_trigs"    : cmd_sump_clr_trigs(self); valid = True;
@@ -11804,6 +12334,8 @@ def proc_cmd( self, cmd ):
   elif cmd_txt == "remove__grid"      : rts = cmd_remove_grid( self, words ); valid = True;
   elif cmd_txt == "apply_view"        : rts = cmd_apply_view( self, words ); valid = True;
   elif cmd_txt == "remove_view"       : rts = cmd_remove_view( self, words ); valid = True;
+  elif cmd_txt == "apply_view_all"    : rts = cmd_apply_view( self, ["","*","",""]); valid = True;
+  elif cmd_txt == "remove_view_all"   : rts = cmd_remove_view( self,["","*","",""] ); valid = True;
   elif cmd_txt == "select_window"     : rts = cmd_select_window( self, words ); valid = True;
 # elif cmd_txt == "delete_view"       : rts = cmd_delete_view( self, words ); valid = True;
   elif cmd_txt == "font_smaller"      : rts = cmd_font_smaller( self ); valid = True;
@@ -11837,19 +12369,22 @@ def proc_cmd( self, cmd ):
   if words[1] == "=":
     if words[0][0:len("sump_user_ctrl")] == "sump_user_ctrl" and "[" in words[0] and "]" in words[0]: 
       rts = cmd_assign_user_ctrl_var( self, words ); value = True;
-    elif words[0][0:len("sump_user_stim")] == "sump_user_stim" and "[" in words[0] and "]" in words[0]: 
-      rts = cmd_assign_user_stim_var( self, words ); value = True;
+#   elif words[0][0:len("sump_user_stim")] == "sump_user_stim" and "[" in words[0] and "]" in words[0]: 
+#     rts = cmd_assign_user_stim_var( self, words ); value = True;
     else:
       rts = cmd_assign_var( self, words ); value = True;
 
-  if rts != None:
+# if not valid:
+#   rts = ["ERROR Unknown command: %s" % cmd_txt];
+
+  if rts != None and not quiet:
     for each in rts:
-#     print(each);# Also use STDOUT
       if ( self.cmd_console.visible == True and each != None ):
         self.cmd_console.add_output_line_to_log( each ,is_bold=False, remove_line_break=False);
     log(self, rts );
+
 # self.cmd_console.add_output_line_to_log("\n",is_bold=False, remove_line_break=False);
-  if ( self.cmd_console.visible == True ):
+  if ( self.cmd_console.visible == True and not quiet ):
 #   self.cmd_console.add_output_line_to_log( "\r",is_bold=False, remove_line_break=False);
     self.cmd_console.restore_default_prefix();
   return;
@@ -12016,10 +12551,12 @@ def init_manual( self ):
   a+=["   bd_protocol                : 'poke' only supported connection protocol.   "];
   a+=["   bd_server_ip               : 'localhost' or IP ('127.0.0.1') of bd_server."];
   a+=["   bd_server_socket           : '21567' TCP/IP socket of bd_server.   "];
+  a+=["   aes_key                    : 256 bit hex AES key.                  "];
+  a+=["   aes_authentication         : 1 = use AES authentication for remote."];
   a+=["  5.2 SUMP Hardware                                                  "];
   a+=["   sump_uut_addr              : Base address of SUMP Control+Data Regs.  "];
   a+=["   sump_user_ctrl             : 32 bit user_ctrl mux setting.            "];
-  a+=["   sump_user_stim             : 32 bit user_stim stimulus setting.       "];
+# a+=["   sump_user_stim             : 32 bit user_stim stimulus setting.       "];
   a+=["   sump_ls_clock_div          : Clock divisor for Low Speed acquisition  "];
   a+=["   sump_trigger_analog_ch     : Analog channel number for comp trig.     "];
   a+=["   sump_trigger_analog_level  : Float analog units for comp trigger.     "];

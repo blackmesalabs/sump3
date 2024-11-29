@@ -51,7 +51,9 @@
 module sump3_rle_hub #
 (
    parameter hub_name        =  "name_unknown",// 12 ch ASCII name for hub
+   parameter hub_name_en     =  1, // Disable for smaller design
    parameter hub_instance    =  0, // Integer 0-255, only used for generates
+   parameter user_bus_en     =  0, // 32bit user_bus enable
    parameter ck_freq_mhz     =  12'd80,
    parameter ck_freq_fracts  =  20'h00000,
    parameter rle_pod_num     =  1  // How many Pods this controller has
@@ -66,6 +68,11 @@ module sump3_rle_hub #
   input  wire                   trigger_mosi, 
   output reg                    trigger_miso,
   output reg                    sump_is_armed,
+  output wire                   user_bus_wr,
+  output wire                   user_bus_rd,
+  output wire  [31:0]           user_bus_addr,
+  output wire  [31:0]           user_bus_wr_d,
+  input  wire  [31:0]           user_bus_rd_d,
 
   output reg  [rle_pod_num-1:0] pod_mosi,
   input  wire [rle_pod_num-1:0] pod_miso
@@ -160,6 +167,8 @@ module sump3_rle_hub #
 
   reg   [31:0]                   ctrl_23_reg = 32'h00000000;
   reg   [31:0]                   ctrl_32_reg = 32'h00000000;
+  reg   [31:0]                   ctrl_37_reg = 32'h00000000;
+  reg   [31:0]                   ctrl_38_reg = 32'h00000000;
   reg   [3:0]                    ctrl_35_reg = 4'h0;
   wire                           reg_32_broadcast_all_controllers;
   wire                           reg_32_broadcast_all_pods;
@@ -180,9 +189,11 @@ module sump3_rle_hub #
   reg                            mode_or_trig  = 0;
   reg                            mode_and_trig = 0;
   wire [3:0]                     trigger_type; 
+  reg                            user_bus_rd_loc = 0;
+  reg                            user_bus_wr_loc = 0;
 
 
-  assign hub_ascii_name = hub_name;
+  assign hub_ascii_name = ( hub_name_en == 1 ) ? hub_name : 96'd0;
 
 
 //-----------------------------------------------------------------------------
@@ -414,6 +425,10 @@ end
 //   0x34 : Trigger Source pod instance.
 //   0x35 : Trigger Width N+1
 //   0x36 : Hub Frequency in u12.20 MHz
+//   0x37 : User Bus Address
+//   0x38 : User Bus Write Data
+//   0x39 : User Bus Read  Data
+//   0x3a : Parameter bits, name_en, user_bus_en, etc
 //   0x3c : Hub instance 0-255
 //   0x3d : Ctrl ASCII Name CHAR 0-3
 //   0x3e : Ctrl ASCII Name CHAR 4-7
@@ -434,6 +449,9 @@ always @ ( posedge clk_cap ) begin
   lb_rd_cap_p1      <= lb_rd_cap;
   lb_wr_d_cap_p1    <= lb_wr_d_cap[31:0];
   lb_cs_data_cap_p1 <= lb_cs_data_cap;
+  user_bus_rd_loc   <= 0;
+  user_bus_wr_loc   <= 0;
+
   cmd_reg_new_cap <= 0;
   if ( lb_wr_cap == 1 && lb_cs_ctrl_cap == 1 ) begin 
     cmd_reg_new_cap <= 1;// This will trigger read of selected cmd_reg
@@ -449,6 +467,14 @@ always @ ( posedge clk_cap ) begin
     if ( cmd_reg_cap == 6'h35 ) begin
       ctrl_35_reg <= lb_wr_d_cap[3:0];
     end
+    if ( cmd_reg_cap == 6'h37 ) begin
+      ctrl_37_reg     <= lb_wr_d_cap[31:0];
+      user_bus_rd_loc <= 1;
+    end
+    if ( cmd_reg_cap == 6'h38 ) begin
+      ctrl_38_reg     <= lb_wr_d_cap[31:0];
+      user_bus_wr_loc <= 1;
+    end
   end 
 end
   assign reg_32_broadcast_all_controllers = ctrl_32_reg[25];
@@ -458,6 +484,13 @@ end
   assign reg_32_rle_pod_reg_addr          = ctrl_32_reg[7:0];
   assign reg_35_trig_width                = ctrl_35_reg[3:0];
   assign trigger_type                     = ctrl_23_reg[3:0];
+
+// The user_bus is optional. When not enabled, any logic connecting to it
+// will automatically be optimized out.
+  assign user_bus_addr = ( user_bus_en == 1 ) ? ctrl_37_reg[31:0] : 32'd0;
+  assign user_bus_wr_d = ( user_bus_en == 1 ) ? ctrl_38_reg[31:0] : 32'd0;
+  assign user_bus_wr   = ( user_bus_en == 1 ) ? user_bus_wr_loc   : 1'b0;
+  assign user_bus_rd   = ( user_bus_en == 1 ) ? user_bus_rd_loc   : 1'b0;
 
 
 //-----------------------------------------------------------------------------
@@ -644,21 +677,39 @@ always @ ( posedge clk_cap ) begin
     rle_pod_rd_sr_pre[31:20] <= ck_freq_mhz;
     rle_pod_rd_sr_pre[19:0]  <= ck_freq_fracts;
   end
+  if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h39 ) begin
+    rd_rdy_pre_pre    <= 1;
+    if ( user_bus_en == 1 ) begin
+      rle_pod_rd_sr_pre <= user_bus_rd_d[31:0];
+    end else begin
+      rle_pod_rd_sr_pre <= 32'd0;
+    end
+  end
+  if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3a ) begin
+    rd_rdy_pre_pre    <= 1;
+    rle_pod_rd_sr_pre <= 32'd0;
+    rle_pod_rd_sr_pre[1] <= user_bus_en;
+    rle_pod_rd_sr_pre[0] <= ~ hub_name_en;
+  end
+
   if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3c ) begin
     rd_rdy_pre_pre    <= 1;
     rle_pod_rd_sr_pre <= hub_instance;
   end
-  if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3d ) begin
-    rd_rdy_pre_pre    <= 1;
-    rle_pod_rd_sr_pre <= hub_ascii_name[96:65];
-  end
-  if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3e ) begin
-    rd_rdy_pre_pre    <= 1;
-    rle_pod_rd_sr_pre <= hub_ascii_name[64:33];
-  end
-  if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3f ) begin
-    rd_rdy_pre_pre    <= 1;
-    rle_pod_rd_sr_pre <= hub_ascii_name[32:1];// ASCII in Verilog is odd
+
+  if ( hub_name_en == 1 ) begin
+    if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3d ) begin
+      rd_rdy_pre_pre    <= 1;
+      rle_pod_rd_sr_pre <= hub_ascii_name[96:65];
+    end
+    if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3e ) begin
+      rd_rdy_pre_pre    <= 1;
+      rle_pod_rd_sr_pre <= hub_ascii_name[64:33];
+    end
+    if ( cmd_reg_new_cap == 1 && cmd_reg_cap[5:0] == 6'h3f ) begin
+      rd_rdy_pre_pre    <= 1;
+      rle_pod_rd_sr_pre <= hub_ascii_name[32:1];// ASCII in Verilog is odd
+    end
   end
   
   if ( rd_rdy_pre == 1 ) begin

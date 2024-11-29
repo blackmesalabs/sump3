@@ -1,0 +1,423 @@
+#####################################################################
+# SUMP3 by BlackMesaLabs  GNU GPL V2 Open Source License. Python 3.x 
+# (C) Copyright 2024 Kevin M. Hubbard - All rights reserved.         
+#####################################################################
+1.0 Scope                                                            
+ This document describes the SUMP3 software and hardware.            
+                                                                     
+2.0 Software Architecture                                            
+ The SUMP3 application is a Python 3.x script using the PyGame module
+ for mouse and graphical user interface and PyGame-GUI module for    
+ standard GUI type widgets. Communication to hardware is over TCP    
+ Socket communications to a BD_SERVER.py instance. The software is   
+ architected as a GUI wrapper around a command line application with 
+ a bd_shell interface.                                               
+                                                                     
+3.0 Hardware Architecture                                            
+ The SUMP3 hardware is parameterizable verilog RTL which infers three
+ types of data acquisition units of user specified width and lengths.
+ Note that the digital_hs unit is deprecated and should not be used. 
+ RLE pods with RLE disabled should be used instead. SUMP3 hardware   
+ is scalable to up to 256 RLE Hubs with each hub having up to 256    
+ RLE pods. Multiple RLE Hubs support multiple clock domains.         
+                                                                     
+                    -------------      ---------                     
+  digital_rle[:] ->| RLE Pod+RAM |<-->| RLE Hub |<-+                 
+                    -------------     |         |  |                 
+                    -------------     |         |  |                 
+  digital_rle[:] ->| RLE Pod+RAM |<-->|         |  |                 
+                    -------------      ---------   |                 
+                                                   |                 
+                    -------------      ---------   |                 
+  digital_ls[:] -->| Sample+Hold |--->| RAM     |<-+                 
+  analog_ls[:] --->|             |     ---------   |                 
+                    -------------                  |                 
+                                       ---------   |   -----------   
+  digital_hs[:] --------------------->| RAM     |<-+  | Software  |  
+                    ---------------    ---------   |  | Control   |  
+  events[31:0] --->| Trigger Logic |---------------+  | Interface |  
+                    ---------------                    -----------   
+                                                                     
+                                                                     
+4.0 Command Descriptions                                             
+ 4.1 GUI Control                                                     
+  gui_minimize      : Minimize the PyGame GUI. Useful for scripting. 
+  exit              : Exit the PyGame GUI.                           
+  win_tab           : Rotate through active windows.                 
+  zoom_in           : Increase signal view magnification             
+  zoom_out          : Decrease signal view magnification             
+  zoom_full         : View all signal samples                        
+  zoom_to_cursors   : View region bound by cursors                   
+  pan_left          : Scroll to the left                             
+  pan_right         : Scroll to the right                            
+  page_up           : Page UP the signal list for selected window.   
+  page_down         : Page Down the signal list for selected window. 
+  search_forward  / : Scroll right to next signal transition         
+  search_backward ? : Scroll left to previous signal transition      
+  time_snap         : Align all RLE windows in time to selected window
+  time_lock         : Lock all RLE windows in time to selected window
+  font_larger       : Increase GUI font size                         
+  font_smaller      : Decrease GUI font size                         
+  Up Arrow          : Zoom In                                        
+  Down Arrow        : Zoom Out                                       
+  Right Arrow       : Pan Right                                      
+  Left Arrow        : Pan Left                                       
+  Backspace         : Return previous view (bd_shell must be closed) 
+  Delete            : Remove selected signal by making visible False 
+  End               : Toggle selected signal hidden attribute        
+  Insert            : Show all signals hidden or not visible         
+  Esc               : Unselect selected signals                      
+ 4.2 Mouse Actions                                                   
+  LeftMouseClick    : Select signal                                  
+  Ctrl+MouseClick   : Select multiple signals                        
+  RightClick        : ZoomOut                                        
+  RightClickDrag    : Zoom to Region                                 
+  Scroll Wheel      : Zoom / Pan                                     
+ 4.3 SUMP Hardware                                                   
+  sump_connect      : Connect to Sump HW via bd_server socket server.
+  sump_arm          : Arm for acquisition without polling.           
+  sump_acquire      : Arm for acquisition with polling until done.   
+  sump_download     : Download acquisition to local file.            
+  sump_force_trig   : Force a software induced trigger.              
+  sump_force_stop   : Force a software induced acquisition stop.     
+  sump_reset        : Reset sump HW and place in idle state.         
+  sump_idle         : Place HW in idle state.                        
+ 4.4 SUMP Software                                                   
+  4.4.1 Capture Save and Load to files                               
+   save_pza          : Save current capture data to a *.pza file.    
+   load_pza          : Load previous capture data from a *.pza file. 
+   save_vcd          : Save current capture data to a *.vcd file.    
+   save_list         : Save current capture data to a list text file.
+  4.4.2 Image Save                                                   
+   save_pic <file>   : Save Window or GUI to an image file.          
+   save_png          : Save Window or GUI to an autonamed PNG file.  
+   save_jpg          : Save Window or GUI to an autonamed JPG file.  
+   save_bmp          : Save Window or GUI to an autonamed BMP file.  
+  4.4.3 Views                                                        
+   select_window n   : Select the active window (1,2 or 3)           
+   create_view       : Create a new view.                            
+   remove_view       : Remove a view from a window.                  
+   add_view          : Add a view to a window.                       
+   apply_view        : Apply a view to a window.                     
+   list_view         : List view attributes.                         
+   add_view_ontap    : Add a view to the select list.                
+   remove_view_ontap : Remove a view from the select list.           
+   list_view_ontap   : List a view from the select list.             
+   save_view name    : Save current view to name.txt.                
+  4.4.4 Signals                                                      
+   create_signal     : Create a new signal for a view.               
+   remove_signal     : Remove a signal from being displayed.         
+   add_signal        : Add a signal to being displayed.              
+   hide_signal       : Remove signal from display.                   
+   show_signal       : Show the signal.                              
+   delete_signal     : Delete a signal.                              
+   paste_signal      : Paste a signal that was cut or copied.        
+   apply_attribute   : Apply attribute to selected or created signal.
+   list_signal       : List signal attributes.                       
+   rename_signal     : Change the signal's name attribute.           
+  4.4.5 Groups                                                       
+   create_group      : Create a new group at existing group level.   
+   end_group         : Close out a newly created group.              
+   expand_group      : Expand a group so that children are visible.  
+   collapse_group    : Collapse group so children are not visible.   
+ 4.5 bd_shell subsystem                                              
+  source            : Source a bd_shell text file.                   
+  sleep_ms          : Sleep (pause) for specified number of ms.      
+  print             : Print the value of an environment variable.    
+  r <addr>          : Read <addr> accessed via bd_server.            
+  w <addr> <data>   : Write <data> to <addr> accessed via bd_server. 
+ 4.6 *NIX subsystem                                                  
+  pwd               : Display current directory path.                
+  cd                : Change current directory.                      
+  ls                : List contents of current directory.            
+  more              : Display text contents of file.                 
+  cp                : Copy a file.                                   
+  vi                : Edit text file using default text editor.      
+                                                                     
+5.0 Environment Variables                                            
+ The bd_shell environment has internal variables that may be modified
+ and read. Using a variable in a script requires preceding the var   
+ name with the '$' symbol. For example, bd_shell commands of:        
+    addr = 12345678                                                  
+    r $addr                                                          
+ Assigns a new variable called 'addr' to 0x12345678 and then reads   
+ the hardware memort location at that address.                       
+ Variables are loaded from the sump3.ini file on startup and internal
+ variables are the written back out to sump3.ini on exit.            
+  5.1 bd_server                                                              
+   bd_connection              : 'tcp' only supported connection type.        
+   bd_protocol                : 'poke' only supported connection protocol.   
+   bd_server_ip               : 'localhost' or IP ('127.0.0.1') of bd_server.
+   bd_server_socket           : '21567' TCP/IP socket of bd_server.   
+   aes_key                    : 256 bit hex AES key.                  
+   aes_authentication         : 1 = use AES authentication for remote.
+  5.2 SUMP Hardware                                                  
+   sump_uut_addr              : Base address of SUMP Control+Data Regs.  
+   sump_user_ctrl             : 32 bit user_ctrl mux setting.            
+   sump_ls_clock_div          : Clock divisor for Low Speed acquisition  
+   sump_trigger_analog_ch     : Analog channel number for comp trig.     
+   sump_trigger_analog_level  : Float analog units for comp trigger.     
+   sump_trigger_delay         : Trigger delay in float uS time units.    
+   sump_trigger_field         : 32bit hex trigger field value.           
+   sump_trigger_location      : trigger location. 0,25,50,75 or 100      
+   sump_trigger_nth           : Nth trigger to trigger on. 1 to 2^16     
+   sump_trigger_type          : Trigger type. or_rising, etc.            
+   sump_download_ondemand     : Only downlad Pods that have views applied.
+  5.3 Unit Under Test                                                    
+   uut_name                   : String name for UUT.                     
+  5.4 VCD Exporting                                                      
+   vcd_viewer_en              : Enables launching external VCD viewer.   
+   vcd_viewer_path            : ie 'C:\gtkwave\bin\gtkwave.exe'       
+   vcd_viewer_gtkw_en         : Enables generation of GTKwave *.gtkw file
+   vcd_viewer_width           : GTKwave width in pixels for GTKW file    
+   vcd_viewer_width           : GTKwave height in pixels for GTKW file   
+   vcd_hierarchical           : Enables VCD file with Hub+Pod hierarchy. 
+   vcd_hubpod_names           : Embed Hub+Pod names in VCD signal names. 
+   vcd_hubpod_nums            : Embed Hub+Pod numbers in VCD signal names.
+   vcd_group_names            : Embed Group names in VCD signal names.
+                                                                     
+6.0 Software Constructs                                              
+ 6.1 Signal                                                          
+  A Signal is a mapping of one or more digital bits or a single ADC  
+  channel into an end user recognizable object suitable for viewing. 
+  Optional Signals of type Group and Spacer may be created in order  
+  to customize how Signals are displayed in Windows.                 
+ 6.2 View                                                            
+  A View is a construct for grouping together multiple signals that  
+  an end user would likely want to see together within a window.    
+  All the Signals within a single View must share the same Timezone. 
+  A View may optionally have a User_ctrl attribute which determines  
+  if the View and the Signals assigned to the View are valid based   
+  on the User_ctrl setting for the acquisition.                      
+ 6.3 Window                                                          
+  A Window is one of three GUI regions for displaying Views. A Window
+  may contain one or more Views but all the Views within a single    
+  Window must share a timezone.                                      
+ 6.4 Timezone                                                        
+  A Timezone is a user defined name for one of multiple acquisition  
+  sample types. Example names might be 'ls', 'hs' and 'rle'.         
+ 6.5 Group                                                           
+  A Group is a Signal of -type group that may optionally be created  
+  to bundle multiple signals together in a single expandable and     
+  collapsable unit. A Group may contain lower level Groups.          
+ 6.6 Spacer                                                          
+  A Spacer is a Signal of -type spacer that may optionally be created
+  to add some white space between Signals when displayed in a Window.
+  Spacers are boring but useful constructs when displaying analog    
+  waveforms.                                                         
+                                                                     
+7.0 Signal Attributes                                                
+ 7.1 -source                                                         
+  A Signal that is not of -type Group or Spacer must have a -source  
+  attribute which defines the acquisition source at the hardware.    
+  Valid sources are digital_ls[:], digital_hs[:], analog_ls[] and    
+  digital_rle[:]. Digital signals may be a single bit like [2] or a  
+  collection of bits like [3:0]. The analog_ls[] must be the ADC     
+  channel number, starting with channel [0].                         
+ 7.2 -format                                                         
+  A Signal must have a display format such as 'binary', 'hex' or     
+  'analog'.                                                          
+ 7.3 -view                                                           
+  A Signal must be assigned a -view attribute as only Views may be   
+  assigned and displayed in a Window. If a Signal is assigned to a   
+  Group, it will automatically inherit the Group's -view attribute.  
+ 7.4 -group                                                          
+  A Signal may optionally be assigned to a signal of -type group.    
+  Groups may be expanded and collapsed. A Signal assigned to a Group 
+  will automatically inherit the Group's -view attribute.            
+ 7.5 -color                                                          
+  A Signal may have a user defined color specified for it either in  
+  English ('blue') or in hex RGB ('0000FF'). The color red is used   
+  automatically to indicate trigger capable binary signals. Assigning
+  a binary signal that is not trigger capable is highly frowned upon.
+ 7.6 -timezone                                                       
+  A Signal must belong to a timezone group. Default timezone group   
+  names are 'ls', 'hs' and 'rle'.                                    
+ 7.7 -visible                                                        
+  A Signal is only displayed in a window if -visible is True.        
+ 7.8 -hidden                                                         
+  A Signal with -hidden True will only have the signal name visible. 
+ 7.10 -range                                                         
+  Analog ADC signals must have their integer range specified. Example
+  range would be 1023 for a 10 bit ADC.                              
+ 7.11 -units                                                         
+ 7.12 -units_per_code                                                
+ 7.13 -offset_units                                                  
+ 7.14 -offset_codes                                                  
+ 7.15 -units_per_division                                            
+ 7.15 -divisions_per_range                                           
+                                                                     
+8.0 Typical Work Flow                                                
+ 8.1 Apply power to the Unit Under Test.                             
+  This may seem silly to include as a step, but the vast majority of 
+  SUMP communication problems involve either lack of power or lack of
+  clock to the UUT hardware.                                         
+ 8.2 Launch bd_server.py software.                                   
+  The bd_server server must be running on the computer that talks    
+  to the Unit Under Test hardware. Typically bd_server imports a     
+  design specific device driver which then communicates to the UUT   
+  hardware over a bus interface ( PCIe, FTDI UART serial, etc ).     
+ 8.3 Launch sump3.py software.                                       
+  The sump3.py application is the backend GUI user interface and may 
+  run either on the same computer as bd_server, or optionally on a   
+  computer that has TCP/IP ( Ethernet / WiFi typ ) access to UUT.    
+  Note that the sump3.py application requires non-standard Python    
+  modules PyGame and PyGame-GUI be installed beforehand.             
+ 8.4 Select desired number of Windows.                               
+  By default sump3.py will display three Windows for signal viewing  
+  and support up to three different Timezones. Reducing the number of
+  of Windows displayed will increase the size of the visible Windows.
+  Click [Display] button and then [Window-n] where n is 1,2 or 3 to  
+  individually turn the three Windows on and off.                    
+ 8.5 Select the active Window.                                       
+  Only one Window may be active at a time and is indicated with a    
+  visible white outline. Toggling the <tab> key or clicking the mouse
+  button inside a Window will select it as the active Window.        
+ 8.6 Add View(s) to the active Window.                               
+  Click [Views] and select one or more Views to then [Apply] to the  
+  active Window. Repeat for all Windows that are enabled.            
+ 8.7 Connect to the SUMP Hardware.                                   
+  Click [Acquisition] and then [Connect] to connect to the UUT SUMP  
+  hardware engine. If the connection is successful the bottom right  
+  text area will list the acquisition information.                   
+ 8.8 Select Trigger Type.                                            
+  Click the text 'Trig Type' and then move the scroll bar above      
+  until the desired trigger type ( 'or_rising', etc ) is indicated.  
+ 8.9 Select Trigger Source.                                          
+  Select Signal(s) in red and then [Set_Trigs] to assign triggers.   
+  A '_/' symbol will show next to signal names that are now triggers.
+ 8.10 Acquire samples.                                               
+  Click either [Arm] or [Acquire] to arm the SUMP HW for a single    
+  acquisition. Acquire will sit and poll the hardware until it has   
+  triggered and acquired all post-trigger samples. Arm will not poll.
+  If Arm was used, click [Download] once the hardware has triggered. 
+ 8.11 View the acquisition results.                                  
+  Click [Display] to see the results, add cursors, zoom-in, out, etc.
+ 8.12 Save acquisition for offline viewing.                          
+  Click [Acquisition] then [Save_PZA] and specify the name for the   
+  *.pza file. [Load_PZA] may then be used to read it back in local   
+  or remotely on a sump3.py instance running offline.                
+ 8.13 Exit application.                                              
+  Click [Exit]. Certain parameters like main window dimensions and   
+  number of view windows that are enabled will be saved in the clear 
+  text file sump3.ini. Other environment variables are stored here as
+  well and may be user modified once the sump3.py app has closed.    
+                                                                     
+9.0 SUMP History                                                     
+ The original OSH+OSS SUMP was designed in 2007 as an external logic 
+ logic analyzer using a Xilinx FPGA eval board for capturing external
+ electrical signals non compressed to all available FPGA block RAM.  
+ See http://www.sump.org/projects/analyzer/                          
+ The original developer published the serial communication protocol  
+ and also wrote a Java based waveform capture tool. The simplicity of
+ the protocol and the quality and maintenance of the Open-Source Java
+ client has inspired many new SUMP compliant projects such as:       
+ 'Open Logic Sniffer' : https://www.sparkfun.com/products/9857       
+                                                                     
+ 9.1 SUMP1-RLE ( 2014 )                                              
+  Black Mesa Labs developed the SUMP1-RLE hardware in 2014 as a      
+  software protocol compatible SUMP engine that was capable of real  
+  time hardware compression of samples ( Run Length Encoded ). The   
+  idea of the project was to leverage the open-source Java software  
+  and couple it with new hardware IP that was capable of storing deep
+  capture acquisitions using only a single FPGA Block RAM, allowing  
+  SUMP to be used internally with existing FPGA designs rather than  
+  a standalone device. FPGA vendor closed license logic analyzers all
+  store using no compression requiring vast amount of Block RAMS to  
+  be useful and typically do not fit will within the limited fabric  
+  resources of an existing FPGA design requiring debugging. SUMP1-RLE
+  was later enhanced to include 2 DWORDs of sampled data along with  
+  the RLE compressed signal events. This enhancement required new    
+  software which was written in .NET Powershell for Windows platform.
+                                                                     
+ 9.2 SUMP2-RLE ( 2016 )                                              
+  SUMP2 is a software and hardware complete redesign to improve upon 
+  the SUMP1-RLE concept. For SUMP2 the .NET software was tossed due  
+  to poor user interface performance and replaced with a PyGame based
+  VCD waveform viewer ( chip_wave.py also from BML ). The SUMP2 HW   
+  is now a single Verilog file with no backwards compatibility with  
+  any legacy SUMP hardware or software systems. SUMP2 hardware is    
+  designed to capture 512bits of DWORDs and 32bits of events versus  
+  the SUMP1 limits of 16 event bits and 64bits of DWORDs. Sample     
+  depth for SUMP2 is now completely defined by a hardware instance   
+  with software that automatically adapts.  The RLE aspect of SUMP2  
+  is optional and not required for simple data intensive captures.   
+  SUMP2 software includes bd_shell support for changing variables    
+  on the fly and providing simple low level hardware access to regs. 
+                                                                     
+ 9.3 SUMP2-DeepSump ( 2018 )                                         
+  DeepSump is an optional hardware addon to SUMP2-RLE. It works by   
+  capturing RLE samples of the 32 events to a deeper and potentially 
+  slower memory device such as DRAM. A FIFO is used to maintain full 
+  bandwidth for short bursts of time. DeepSump captures are not      
+  displayed in the sump2.py GUI, but are instead downloaded and      
+  directly converted to VCD format for viewing in an external VCD    
+  viewer such as GTKwave. The SUMP2-RLE format for compression is    
+  very similar to VCD format, so conversion is very simple and fast. 
+                                                                     
+ 9.4 SUMP-2 Near Field / Far Field ( 2022 )                          
+  RLE Masking/Unmasking has been replaced with Near Field/Far Field. 
+  An event signal that is Near Field only is sampled around the      
+  trigger and stored in non-RLE sample memory. Far Field events are  
+  RLE compressed and stored in RLE memory. By specifying more events 
+  to be Near Field, fewer events go into RLE memory which allows for 
+  much wider Far Field captures in absolute time.                    
+  The sump hardware can automatically detect spurious signals and    
+  assign them to Near Field. The user may also assign Near Field     
+  prior to arming.                                                   
+                                                                     
+ 9.5 SUMP2 Sunsetting (2023)                                         
+  SUMP2 architecture is fundamentally limited to simultaneous capture
+  of 32 RLE compressible binary signals. The maximum capture length  
+  is limited to a few milliseconds. The RLE architecture was never   
+  designed to support things like asynchronous ADC samples and highly
+  compressible acquisitions of hundreds of milliseconds to seconds.  
+  SUMP2 was architected to being a fully functional FPGA ILA that    
+  only required one or two 36Kbit block RAMs - less than 5% of the   
+  memory resources of a 90nm generation $10 FPGA. SUMP2 was never    
+  intended to be used in 2nm FPGAs with almost unlimited RAM that are
+  coming very soon. The decision was made to take SUMP in a new      
+  direction to address these needs while still maintaining the best  
+  legacy features of the SUMP2 design.                               
+                                                                     
+ 9.6 SUMP3 Mixed-Signal (2023)                                       
+  SUMP3 inherits and enhances many design aspects of SUMP2 while     
+  also including mixed signal ADC samples and digital sample and hold
+  signals at a user adjustable sample rate supporting captures in    
+  the one to ten second range for slowly sampled signals while also  
+  capturing high speed digital signals that are all correlated in    
+  time with a common trigger. Better RLE compression using multiple  
+  RLE engines which are divided in 8 bit boundaries with no single   
+  32bit RLE limit. Faster RLE rendering by not merging non-RLE       
+  samples and rendering RLE as RLE points without decompressing.     
+  SUMP3's unique feature is providing up to three different capture  
+  mechanisms that may all be displayed at once with a single trigger 
+  as a timing reference point between them. It is designed to capture
+  thousands of signals at once, and/or using user_ctrl input muxes.  
+                                                                     
+10.0 BD_SERVER.py                                                    
+  The SUMP2.py application does not communicate directly to hardware 
+  but instead uses BD_SERVER.py as an interface layer. BD_SERVER is  
+  a multi use server application that accepts requests via TCP to    
+  read and write to low level hardware and then translates those     
+  requests using one of many low level hardware protocols available. 
+  BD_SERVER allows the low level communications to easily change from
+  interfaces like USB FTDI serial to PCI without requiring any change
+  to the high level application. This interface also supports the    
+  debugging of an embedded system from a users regular desktop with  
+  a standard Ethernet or Wifi connection between the two. Typical use
+  is to run both python applications on same machine and use the TCP 
+  localhost feature within the TCP stack for communications.         
+  The separation of sump2.py from bd_server.py allows for sump2.py to
+  remain completely open source while internal proprietary versions  
+  of bd_server.py may be created to communicate with closed source   
+  systems.                                                           
+                                                                     
+    ------------           --------------           ---------------  
+   |  sump3.py  |<------->| bd_server.py |<------->| SUMP Hardware | 
+    ------------  Ethernet --------------  USB,PCI  ---------------  
+                                                                     
+11.0 License                                                         
+ This hardware and software is released under the GNU GPLv2 license. 
+ Full license is available at http://www.gnu.org                     
+                                                                     
