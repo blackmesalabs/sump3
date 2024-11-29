@@ -1,0 +1,18 @@
+# ChipVault hierarchy file.  See http://chipvault.sourceforge.net/
+hlist.txt
+  top.v
+    sump3_top.v
+      sump3_core.v
+      sump3_rle_hub.v
+      sump3_rle_pod.v
+    ft232_xface.v
+      mesa_uart_phy.v
+        mesa_uart.v
+        mesa_tx_uart.v
+        mesa_byte2ascii.v
+        mesa_ascii2nibble.v
+      mesa_decode.v
+      mesa2lb.v
+      mesa_id.v
+        time_stamp.v
+      mesa2ctrl.v

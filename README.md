@@ -16,11 +16,9 @@ File List:
   
 sump3 project is created by Kevin Hubbard of BlackMesaLabs.
 
-Note : I have not uploaded the entire FPGA design files yet ( including the Mesa Bus Protocol stuff )
+This firmware is currently running on a Digilent BASYS3 Artix7 board.
 
-This firmware is currently running on my AMD/Xilinx Spartan7 S7 Mini board and being tested.
-
-In the future, I will have a full write up at my blog site:
-https://blackmesalabs.wordpress.com
+  Other files needed for this example design to work over FTDI UART are available here:
+    https://github.com/blackmesalabs/MesaBusProtocol
 
 EOF
