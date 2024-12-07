@@ -109,6 +109,8 @@
 # 2024.11.27 : Removed all fnmatch.filter wildcard searches. Doesn't work with [3:0] in names.
 # 2024.11.27 : set_trig now toggles trigger attribute rather than set it
 # 2024.11.27 : Added quiet to proc_cmd to greatly speed up applying views
+# 2024.12.05 : cur_val_list improvements. mouse_event_single_click_waveform() improvements.
+# 2024.12.06 : viewrom_debugger() added. Don't crash on bad View ROMs, just ignore them.
 #
 # TODO: cmd_apply_view doesn't handle user_ctrl clashes correctly, for example if 
 #       digital_ls is used it may wrongly reject RLE Pods with user ctrls.
@@ -223,7 +225,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.11.27";
+    self.vers = "2024.12.06";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -1913,12 +1915,27 @@ def mouse_event_single_click_waveform( self ):
         if ( ( self.mouse_x > ( x1+x2+w2 ) ) and
              ( self.mouse_y > ( y1+y2    ) ) and
              ( self.mouse_y < ( y1+y2+h2 ) )     ):
-          print( each_signal.name );
+          # Find the nearest cursor to the mouse
+          min_delta_x = 1000000000;
+          min_cur = None;
           for each_cursor in self.cursor_list:
-            if ( each_cursor.visible == True ):
-              each_cursor.x = self.mouse_x - (3*margin);
-              update_cursors_to_mouse(self);
-              break;
+            if each_cursor.visible == True and each_cursor.parent != None:
+              delta_x = abs( self.mouse_x - each_cursor.x );
+              if delta_x < min_delta_x:
+                min_delta_x = delta_x;
+                min_cur     = each_cursor; 
+          if min_cur != None:
+            min_cur.x = self.mouse_x - (3*margin);
+            update_cursors_to_mouse(self);
+            break;
+
+#         print( each_signal.name );
+#         for each_cursor in self.cursor_list:
+#           if ( each_cursor.visible == True ):
+#             each_cursor.x = self.mouse_x - (3*margin);
+#             update_cursors_to_mouse(self);
+#             break;
+
 #         if self.container_display_list[0].visible and self.window_selected != None :
 #           win_num      = self.window_selected;
 #           my_win       = self.window_list[win_num];
@@ -1933,7 +1950,6 @@ def mouse_event_single_click_waveform( self ):
 #               for (i,rle_time) in enumerate( each_sig.rle_time ):
 #                 if ( rle_time + my_win.trigger_index ) > center_time:
 #                   break;
-#HERE
   return rts;
 
 def proc_expand_group( self, my_sig ):
@@ -2829,18 +2845,29 @@ def draw_digital_lines( self, my_window ):
         # Display hex values at each cursor
         for y_key in self.cursor_list[i].sig_value_list:
           cur_val_list = self.cursor_list[i].sig_value_list[y_key];
-          vasili = True;
-          last_x = 0; last_txt = "";
+          vasili = True;# Find the one appropriate value in the list and then stop
+          last_x = -1; last_txt = "";
           for (the_win, x,y,txt) in cur_val_list:
-            if the_win == my_window:
-              if vasili and each_cur_x >= last_x and each_cur_x < x :
+            if the_win == my_window and vasili:
+              txt_disp = None;
+              (the_win, x3,y3,txt3) = cur_val_list[0]; # Left most value to display
+              (the_win, x4,y4,txt4) = cur_val_list[-1];# Right most value to display
+
+              if each_cur_x >= last_x and each_cur_x < x and last_x != -1:
+                txt_disp = last_txt;
+              elif each_cur_x >= x4:
+                txt_disp = txt4;
+              elif each_cur_x <= x3:
+                txt_disp = txt3;
+
+              if txt_disp != None:
                 vasili = False;
-                txt_r = self.font.render(last_txt,True, color_cursor );
+                txt_r = self.font.render(txt_disp,True, color_cursor );
                 try:
                   w1 = txt_r.get_width();
                   h1 = txt_r.get_height();
                   x1 = each_cur_x - int(w1/2);
-                  y = y - int(h1/4);# Put cursor value slight higher above regular values
+                  y = y - int(h1/8);# Put cursor value slight higher above regular values
                   self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(x1,y,w1,h1) );
                   my_surface.blit(txt_r,(x1,y) );# Place signal value at cursor location
                 except:
@@ -3131,6 +3158,19 @@ def create_drawing_lines( self, my_win ):
                 # Pygame will crash if pels are too far off screen
                 if x1 < 0 : x1 = -1;
                 if x1 > w : x1 = w+1;
+
+                # The sample BEFORE the 1st onscreen sample
+                if len( cur_val_list ) == 0:
+                  hex_str = None;
+                  if len( each_sig.fsm_state_dict ) != 0:
+                    if each_sig.fsm_state_dict.get(last_value) != None:
+                      hex_str = each_sig.fsm_state_dict[last_value];
+                  if hex_str == None:
+                    hex_str = "%08x" % last_value;
+                    hex_str = hex_str[ - each_sig.nibble_cnt :];
+                  txt = "<"+hex_str+" ";
+                  cur_val_list += [(my_win,x1-1,y1,txt+">")];
+
                 if each_value != last_value:
                   hex_str = None;
                   if len( each_sig.fsm_state_dict ) != 0:
@@ -3140,8 +3180,10 @@ def create_drawing_lines( self, my_win ):
                     hex_str = "%08x" % each_value;
                     hex_str = hex_str[ - each_sig.nibble_cnt :];
                   txt = "<"+hex_str+" ";
+
                   if True:
                     cur_val_list += [(my_win,x1,y1,txt+">")];
+#                   print(txt);
                   txt_r = self.font.render(txt,True, sig_color );
                   if vasili:
                     w1 = txt_r.get_width();
@@ -3149,30 +3191,35 @@ def create_drawing_lines( self, my_win ):
                 else:
                   txt_r = None;
 
-                # Draw the sample before the 1st sample drawn on the display. 
-                # the RLE time of it may be off screen. We're showing the value 
-                # before the current value
-                if txt_r != None:
-                  if not first_drawn:
-                    hex_str2 = None;
-                    if len( each_sig.fsm_state_dict ) != 0:
-                      if each_sig.fsm_state_dict.get(last_value) != None:
-                        hex_str2 = each_sig.fsm_state_dict[last_value];
-                    if hex_str2 == None:
-                      hex_str2 = "%08x" % last_value;
-                      hex_str2 = hex_str2[ - each_sig.nibble_cnt :];
-                    txt2 = ""+hex_str2+">";
-                    txt_r2 = self.font.render(txt2,True, sig_color );
-                    w2 = txt_r2.get_width();
-                    if ( ( x1-w2 ) > 0 ):
-                      line_list += [ (x1-w2,y1,txt_r2) ];# Only draw if room on screen
-                    first_drawn = True;
+                # Draw the sample BEFORE the 1st sample drawn on the display. 
+                # The RLE time of it may be off screen. We're showing value before new value.
+                if txt_r != None and not first_drawn:
+                  first_drawn = True;
+                  hex_str2 = None;
+                  if len( each_sig.fsm_state_dict ) != 0:
+                    if each_sig.fsm_state_dict.get(last_value) != None:
+                      hex_str2 = each_sig.fsm_state_dict[last_value];
+                  if hex_str2 == None:
+                    hex_str2 = "%08x" % last_value;
+                    hex_str2 = hex_str2[ - each_sig.nibble_cnt :];
+                  txt2 = ""+hex_str2+">";
+                  txt_r2 = self.font.render(txt2,True, sig_color );
+                  w3 = txt_r2.get_width();
+                  line_list += [ (x1-w3,y1,txt_r2) ];# Draw to left of current sample
+
+#                 if len( line_list ) > 0:
+#                   current_sample = line_list[-1];
+#                   list_list.pop();# Remove last item
+#                   line_list += [ (x1-w3,y1,txt_r2) ];# Draw to left of current sample
+#                   line_list += [ current_sample ];
+#                 print("%s = %s" % ( each_sig.name, hex_str2 ) );
 
                 # Don't render text that is getting overwritten by new sample, backup and
                 # draw "<>" instead of full sample. Both a performance and clutter feature
                 if len(line_list) >= 1 and txt_r != None:
                   (last_x,last_y,last_txt_r) = line_list[-1];
-                  if last_x + w1 > x1:
+                  w4 = last_txt_r.get_width();
+                  if last_x + w4 > x1:
                     line_list[-1] = (last_x,last_y,txt_r_nospace);
                   else:
                     if last_hex_str != None:
@@ -3181,6 +3228,22 @@ def create_drawing_lines( self, my_win ):
                         line_list[-1] = (last_x,last_y,txt_wider );
                     line_list += [ (x1-w2,y1,txt_close_bracket) ];# Turn "<01   " into "<01  >"
                   last_hex_str = hex_str;
+
+#               # Don't render text that is getting overwritten by new sample, backup and
+#               # draw "<>" instead of full sample. Both a performance and clutter feature
+#               if len(line_list) >= 1 and txt_r != None:
+#                 (last_x,last_y,last_txt_r) = line_list[-1];
+#                 if last_x + w1 > x1:
+#                   line_list[-1] = (last_x,last_y,txt_r_nospace);
+#                 else:
+#                   if last_hex_str != None:
+#                     if ( x1 - last_x ) > ( w1 + w2 ):
+#                       txt_wider = self.font.render("< "+last_hex_str,True, sig_color );
+#                       line_list[-1] = (last_x,last_y,txt_wider );
+#                   line_list += [ (x1-w2,y1,txt_close_bracket) ];# Turn "<01   " into "<01  >"
+#                 last_hex_str = hex_str;
+
+                # If there is new text to render, render it now
                 if txt_r != None:
                   line_list += [ (x1,y1,txt_r) ];
 
@@ -8012,8 +8075,10 @@ class sump3_hw:
         print("    RLE Hub %d, Pod #%d %s : HW Rev = %02x" % (i,j, name, ((pod_hw_cfg & 0xFF000000)>>24)));
         # If this pod has a view rom, process it
         if ( pod_hw_cfg & 0x00000002 ) != 0:
-          rom_byte_list = self.rd_pod_view_rom( hub=i,pod=j );
+          pod_view_rom_kb = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_view_rom_kb )[0];
+          rom_byte_list = self.rd_pod_view_rom( hub=i,pod=j,size_kb=pod_view_rom_kb );
           self.view_rom_list += self.parse_view_rom( rom_byte_list=rom_byte_list, hub=i, pod=j, inst=pod_instance );
+#HERE72
 
         # Generate a fake view rom with no signal names in case there is no rom at all
         # Use the embedded hub+pod names for signal name
@@ -8247,70 +8312,130 @@ class sump3_hw:
     print("Core View ROM Contents");
     data_list = [];
     view_rom_kb = self.rd( self.cmd_rd_view_rom_kb )[0];
-    self.wr( self.cmd_wr_ram_rd_page, 0x200 );# ROM
-    self.wr( self.cmd_wr_ram_rd_ptr,  0x0000 );
-    data_list = self.rd( self.cmd_rd_ram_data, num_dwords=1);
-    k = 0;
-    if ( ( data_list[0] & 0x000000FF ) == self.vrbyte_rom_end ):
-      found_rom_end = False;
-      while not found_rom_end:
-        bunch_of_dwords = self.rd( self.cmd_rd_ram_data, num_dwords=64);
-        for i in range( 0, len( bunch_of_dwords )-1 ):
-          if ( bunch_of_dwords[i]   == 0x00000000 and
-               bunch_of_dwords[i+1] == 0x00000000     ):
-            bunch_of_dwords = bunch_of_dwords[0:i+2];
-            found_rom_end = True;
-            break;
-#       for each in bunch_of_dwords:
-#         print("%d : %08x" % (k, each) );
-#         k +=1;
-        data_list += bunch_of_dwords;
-        # Don't loop beyond the actual size of the ROM - Abort.
-        if len( data_list ) > ( 32* view_rom_kb ) :
-          print("WARNING: No View ROM END Found. Maybe your ROM is sized wrong?");
-          return rts;
-      rom_bit_cnt = ( len(data_list) * 32 ) / 1024;
-      print("ROM Size is %d Kbits" % rom_bit_cnt );
-      for each_dword in data_list:
-        byte_list = self.dword2bytes( each_dword );
-        rts += byte_list;
-      rts = list(reversed(rts));# Put ROM in proper order for byte parsing
-#     for each in rts:
-#       print("%02x" % each );
-    else:
-      print("WARNING: No View ROM Found for Core");
+    rom_length = int( view_rom_kb*1024/32 );
+    rts = self.rd_any_rom( rom_type = "core", rom_addr = None, rom_length = rom_length );
     return rts;
 
-
-  def rd_pod_view_rom(self, hub, pod ):
+  def rd_pod_view_rom(self, hub, pod, size_kb ):
     rts = [];
     self.wr_pod(hub=hub,pod=pod,reg=self.rle_pod_addr_ram_page_ptr,data=0x80000000);
+    rom_length = int( size_kb * 1024 / 32 );
+    rts = self.rd_any_rom( rom_type = "pod", rom_addr = (hub,pod), rom_length = rom_length );
+    return rts;
 
-#   print("Pod View ROM Contents");
-    dword = self.rd_pod(hub=hub,pod=pod,reg=self.rle_pod_addr_ram_data)[0];
-    if ( ( dword & 0x000000FF ) != self.vrbyte_rom_end ):
-      print("WARNING: No View ROM Found for Hub %d, Pod %d : %08x" % ( hub, pod, dword ) );
-#     print("  %08x" % dword );
-      return rts;
+  def rd_any_rom( self, rom_type, rom_addr, rom_length ):
+    rts = [];
+    if rom_type == "core":
+      self.wr( self.cmd_wr_ram_rd_page, 0x200 );# ROM
+      self.wr( self.cmd_wr_ram_rd_ptr,  0x0000 );
+      data_list = self.rd( self.cmd_rd_ram_data, num_dwords=1);
+    else:
+      (hub,pod) = rom_addr;
+      data_list = self.rd_pod(hub=hub,pod=pod,reg=self.rle_pod_addr_ram_data);
 
-    rts += self.dword2bytes( dword );
-    rom_done = False;
-    while rom_done == False:
-      dword = self.rd_pod(hub=None,pod=None,reg=None)[0];# Note the burst read
-      # ROMs will always end with a string of 8 0x00 bytes.
-      # The only 4 byte binary params are for vectors with 16 bits each for
-      # bottom and top rip points.  A vector like foo[0:0] is not possible.
-      # Regardless of byte alignment, any DWORD of 0x00000000 will safely
-      # indicate that the ROM has ended.
-      # Just searching for vrbyte_rom_start (0xF0) is not possible since
-      # that value could be a bit index for a signal.
-      if dword == 0x00000000:
-        rom_done = True;
+    if ( ( data_list[0] & 0x000000FF ) == self.vrbyte_rom_end ):
+      remaining_dwords = int( rom_length )-1;
+      while remaining_dwords > 0:
+        if remaining_dwords > 64:
+          dwords_to_read = 64;
+        else:
+          dwords_to_read = remaining_dwords;
+        if rom_type == "pod":
+          dwords_to_read = 1;
+
+        if rom_type == "core":
+          data_list += self.rd( self.cmd_rd_ram_data, num_dwords=dwords_to_read);
+        else:
+          data_list += self.rd_pod(hub=None,pod=None,reg=None);# Note the burst read
+        remaining_dwords -= dwords_to_read;
+
+      found_rom_end = False;
+      for i in range( 0, len( data_list )-1 ):
+#       print("%d %08x" % ( i, data_list[i] ));
+        if ( data_list[i]   == 0x00000000 and
+             data_list[i+1] == 0x00000000     ):
+          data_list = data_list[0:i+2];
+          found_rom_end = True;
+          break;
+        
+      if found_rom_end:
+        rom_dword_cnt = len(data_list);
+        a = 100 * float( rom_dword_cnt / rom_length );
+        b = rom_length * 32 / 1024;
+        print("ROM Size is %02f%% full of %d Kbits" % ( a, b) );
+
+        for each_dword in data_list:
+          byte_list = self.dword2bytes( each_dword );
+          rts += byte_list;
         rts = list(reversed(rts));# Put ROM in proper order for byte parsing
-      else:
-        byte_list = self.dword2bytes( dword );
-        rts += byte_list;
-    return rts; 
+
+        # Dump hex bytes to files for debugging 
+        if rom_type == "core":
+          file_name = "viewrom_core";
+        else:
+          file_name = "viewrom_pod_%d_%d" % ( hub, pod );
+        dump_list = [ "%02x" % each for each in rts ];# list comprehension
+        list2file( (file_name + "_hex.txt") , dump_list );
+        dbg_list = self.viewrom_debugger( byte_list = rts );
+        list2file( (file_name + "_txt.txt") , dbg_list );
+    return rts;
+
+  def viewrom_debugger( self, byte_list ):
+    rts = [];
+    code_dict = {};
+    code_dict[0xF0] = ("ROM_Start"              , 0, False );
+    code_dict[0xF1] = ("View_Name"              , 0, True  );
+    code_dict[0xF2] = ("Signal_Source_This_Pod" , 0, False );
+    code_dict[0xF3] = ("Signal_Source_Hub_Pod"  , 2, False );
+    code_dict[0xF4] = ("Signal_Source_Name"     , 0, True  );
+    code_dict[0xF5] = ("Group_Name"             , 0, True  );
+    code_dict[0xF6] = ("Signal_Bit"             , 2, True  );
+    code_dict[0xF7] = ("Signal_Vector"          , 4, True  );
+    code_dict[0xF8] = ("FSM_State"              , 1, True  );
+    code_dict[0xFD] = ("bd_shell"               , 0, True  );
+    code_dict[0xFE] = ("attribute"              , 0, True  );
+    code_dict[0xE0] = ("ROM_End"                , 0, False );
+    code_dict[0xE1] = ("View_End"               , 0, False );
+    code_dict[0xE2] = ("Source_End"             , 0, False );
+    code_dict[0xE3] = ("Source_End"             , 0, False );
+    code_dict[0xE4] = ("Source_End"             , 0, False );
+    code_dict[0xE5] = ("Group_End"              , 0, False );
+
+    # Ignore the 1st 8 bytes of 0x00
+    parsing_ascii = False;
+    ascii_bool = False;
+    parm_cnt = 0;
+    txt = "";
+    line = "";
+    for each_byte in byte_list[8:]:
+      if parsing_ascii:
+        if each_byte >= 0xE0:
+          parsing_ascii = False;
+        else:
+          txt = txt + "%c" % each_byte;
+      if not parsing_ascii:
+        if parm_cnt != 0:
+          line = line + "%02x " % each_byte;
+          parm_cnt = parm_cnt - 1;
+        else:
+          if ( code_dict.get( each_byte ) == None ): 
+            line = line + "E! %02x " % each_byte;
+          else:
+            ( name, parm_cnt, ascii_bool ) = code_dict[ each_byte ];
+            # Dump any queued info
+            if line != "" or txt != "":
+              rts += ["%s : %s" % ( line, txt ) ];
+            line = ""; txt = "";
+
+            # Start new line
+            line = "%02x : %s :" % ( each_byte, name );
+            if parm_cnt == 0 and not ascii_bool:
+              rts += ["%s : %s" % ( line, txt ) ];
+              line = ""; txt = "";
+        if parm_cnt == 0 and ascii_bool:
+          parsing_ascii = True;
+    return rts;
+
 
   #########################################
   # Code ParmBytes ASCII   Definition
