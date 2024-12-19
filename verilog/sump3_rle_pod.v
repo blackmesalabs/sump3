@@ -92,6 +92,7 @@
 -- 0.17  10.30.24  khubbard       Deprecated pod_user_stim, _stat 
 -- 0.17  10.31.24  khubbard       Expanded ctrl_0_reg to add all params
 -- 0.18  11.05.24  khubbard       Params for norom_view_ dwords,bytes,bits
+-- 0.19  12.16.24  khubbard       Default pod_user_mask_en=1
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -106,7 +107,7 @@ module sump3_rle_pod #
   parameter rle_disable          =  0,// Disable RLE for Fmax. Removes XOR chain
   parameter pod_user_ctrl_en     =  1,// Disabling features will shrink design
 //parameter pod_user_stim_en     =  1,// but software won't know they are gone.
-  parameter pod_user_mask_en     =  0,
+  parameter pod_user_mask_en     =  1,
   parameter pod_name_en          =  1,
   parameter norom_view_dwords    =  0,// If no ROM used, display all events in
   parameter norom_view_words     =  0,// If no ROM used, display all events in

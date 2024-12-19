@@ -117,6 +117,14 @@
 # 2024.12.12 : cmd_create_signal() assign type="analog" if source=="analog_ls"
 # 2024.12.12 : Fixed select_window() border shadow issue with VNC.
 # 2024.12.12 : On load_pza, set self.sump_connected = False;
+# 2024.12.16 : Added sig attribute maskable for RLE masking.
+# 2024.12.17 : Display->Navigation. button swaps for more vert space. font_size_toolbar.
+# 2024.12.17 : Added screen_window_rle_time, time range at upper right corner. 
+# 2024.12.17 : Update cursor deltas so text and GUI delta always match. Don't bold triggerables
+# 2024.12.18 : Added y_scrolled_stats feature in upper-left corner when scrolling long signal list. 
+#
+# NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
+#       bottom 32 RLE bits instead of looking at actual hardware configuration.
 #
 # TODO: cmd_apply_view doesn't handle user_ctrl clashes correctly, for example if 
 #       digital_ls is used it may wrongly reject RLE Pods with user ctrls.
@@ -134,7 +142,7 @@
 # DONE: Can timezone names of "ls", "hs" and "rle" be default based on source?
 # DONE: Scroll Bar isn't working right for "Trig Type" selection.
 # DONE: Remote button pressing. Perhaps via text file?
-# TODO: Process more than a single DWORD of digital bits.
+# TODO: Process more than a single DWORD of digital LS bits.
 # DONE: Multi clock domain support for RLE pods.
 # TODO: AND triggers and Pattern triggers across multiple RLE pods.
 # DONE: save_view doesn't save trigger attributes.
@@ -145,7 +153,7 @@
 # TBD:  More decimal places than just 1/10ths for some measurements.
 # DONE: Analog triggering not working?
 # TODO: sump_read_config() and sump.rd_cfg() should be consolidated.
-# TODO: rle_masked should be prevented in GUI if not possible in HW.
+# DONE: rle_masked should be prevented in GUI if not possible in HW.
 #
 # Todays Bugs:
 #  DONE triggerable = True not in view rom file.
@@ -231,7 +239,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.12.12";
+    self.vers = "2024.12.18";
     self.copyright = "(C)2024 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -268,12 +276,19 @@ class main:
   
     init_display(self);
     self.font = get_font( self,self.vars["font_name"],self.vars["font_size"]);
+    self.font_toolbar = get_font( self,self.vars["font_name"],self.vars["font_size_toolbar"]);
+
+    # Calculate Width and Height of font for future reference
+    txt = self.font_toolbar.render("4",True, ( 255,255,255 ) );
+    self.txt_toolbar_width  = txt.get_width();
+    self.txt_toolbar_height = txt.get_height();
 
     self.options = Options();
 
     self.screen_width  = int( self.vars["screen_width"], 10 );
     self.screen_height = int( self.vars["screen_height"], 10 );
     self.screen_windows = int( self.vars["screen_windows"], 16 );
+    self.screen_window_rle_time = int( self.vars["screen_window_rle_time"], 16 );
 
     self.options.resolution = ( self.screen_width, self.screen_height );
     self.ui_manager = UIManager(self.options.resolution)
@@ -434,6 +449,7 @@ class main:
                               abs(self.mouse_btn1_dn[1]-self.mouse_btn1_up[1])  );
               if ( mouse_delta[0] < 5 and mouse_delta[1] < 5 ):
                 mouse_event_single_click_waveform( self );
+                self.refresh_cursors = True;
 #               print("Mouse!");
  
 
@@ -619,7 +635,7 @@ class main:
             ( zoom, pan, scroll ) = self.window_list[wave_i].zoom_pan_list;
 
             # Scroll wheel behaves different when no signals are selected - it controls
-            # timezone window behavior for zoom and pan
+            # timezone window behavior for zoom, pan and signal list vertical scroll
             no_signals_selected = True;
             no_analog_signals_selected = True;
             for each_signal in self.signal_list:
@@ -938,6 +954,7 @@ class main:
           main_menu_press = True;
           auto_select_window(self);
           self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
+#       print( event.ui_object_id );
 
         if ( main_menu_press == True ):
           proc_main_menu_button_press( self );
@@ -997,10 +1014,17 @@ class main:
         self.refresh_cursors = True;
 #     if ( self.refresh_cursors == True ):
 #       create_cursor_lines(self); # Generate cursors
+
+
       if ( self.refresh_waveforms == True or 
            len( self.refresh_window_list ) != 0 or
            self.refresh_sig_names == True or 
            self.refresh_cursors == True      ):
+        # 2024.12.17 update cursor deltas otherwise text and GUI deltas won't match
+        # The create_cursor_lines() method uses calculations from display_text_stats()
+        # value that is shared is self.cursor_list[0].delta_txt
+        if ( self.refresh_cursors == True ):
+          display_text_stats( self );
         create_cursor_lines(self); # Generate cursors
         draw_surfaces(self);
         self.refresh_waveforms = False;
@@ -1154,7 +1178,7 @@ def display_text_stats( self ):
 
       for (i, each_view) in enumerate( my_win.view_list ):
         if i == 0:
-          rts += ["views:"];
+          rts += ["Views:"];
         if each_view.name != None:
           rts += [" "+each_view.name];
     else:
@@ -1246,9 +1270,11 @@ def display_text_stats( self ):
     (a,b) = time_rounder( min_time, "ps" );
     (c,d) = time_rounder( max_time, "ps" );
     if not short_text:
-      rts += ["View: %d%s to +%d%s" % (a,b,c,d) ];
+      rts += ["Time: %d%s to +%d%s" % (a,b,c,d) ];
+#     rts += ["View: %d%s to +%d%s" % (a,b,c,d) ];
 
-    font_size = int( self.vars["font_size"] );
+#   font_size = int( self.vars["font_size"] );
+    font_size = int( self.vars["font_size_toolbar"] );
     if font_size > 20:
       w = 10.0;
     elif font_size < 14:
@@ -1325,7 +1351,8 @@ def display_text_stats( self ):
             line = line.replace("[ ","[{" );
             line = line.replace(" ]","}]" );
           if not short_text:
-            rts += ["W%d %s" % (i+1,line) ];
+#           rts += ["W%d %s" % (i+1,line) ];
+            rts += ["W%d%s" % (i+1,line) ];
 
     if self.window_selected != None:
       win_num = self.window_selected;
@@ -1346,9 +1373,11 @@ def display_text_stats( self ):
 #     trigger_index = my_win.trigger_index;
 #     if my_win.samples_viewport != None:
 #       rts += [ my_win.samples_viewport ];# ie "[  ---T-- ]"
-      rts += [ ""];
-      rts += [ "Window   = %s" % my_win.name ];
-      rts += [ "timezone = %s" % my_win.timezone ];
+#     rts += [ ""];
+#     rts += [ "Window   = %s" % my_win.name ];
+#     rts += [ "timezone = %s" % my_win.timezone ];
+      rts += [ "Window: %s,%s" % ( my_win.name, my_win.timezone ) ];
+
       if ( my_win.sample_period != None and
            my_win.sample_unit   != None and
            my_win.samples_total != None and
@@ -1356,53 +1385,58 @@ def display_text_stats( self ):
         capture_width = my_win.sample_period * my_win.samples_total;
         visible_width = my_win.sample_period * my_win.samples_shown;
         (a,b) = time_rounder( capture_width, my_win.sample_unit );
-        rts += [ "capture width = %d %s" % ( a,b ) ];
-        (a,b) = time_rounder( visible_width, my_win.sample_unit );
-        rts += [ "visible width = %d %s" % ( a,b ) ];
+        (c,d) = time_rounder( visible_width, my_win.sample_unit );
+#       rts += [ "capture width = %d %s" % (a,b) ];
+#       rts += [ "visible width = %d %s" % (c,d) ];
+        rts += [ "Visible: %d%s of %d%s" % (c,d,a,b) ];
+
         if my_win.grid_enable:
           rts += [ "%d %s per division" % ( round((a/10.0),3),b ) ];
-#         rts += [ "%d %s per division" % ( round((a/10.0),1),b ) ];
 
 #     else:
 #       print(my_win.sample_period, my_win.sample_unit, my_win.samples_total, my_win.samples_shown );
 
-    if self.window_selected != None and not short_text:
-      # List all the Views assigned to this window
-      for (i, each_view) in enumerate( my_win.view_list ):
-        if i == 0:
-          rts += ["views:"];
-        rts += [" "+each_view.name];
+#   if self.window_selected != None and not short_text:
+#     # List all the Views assigned to this window
+#     for (i, each_view) in enumerate( my_win.view_list ):
+#       if i == 0:
+#         rts += ["views:"];
+#       rts += [" "+each_view.name];
       
 #   if self.window_selected != None and not short_text:
     if self.window_selected != None :
       # List all the cursors
       if trigger_index != None and x_space != 0:
-        if self.cursor_list[0].visible or self.cursor_list[1].visible:
-          rts += ["cursors:"];
+
+        txt = "";
+        self.cursor_list[0].delta_txt = None;
         if self.cursor_list[0].visible and sample_unit != None and sample_period != None:
           c1_i = float( self.cursor_list[0].x / x_space ) + samples_start_offset - trigger_index;
           c1_t = c1_i * sample_period;
-          (a,b) = time_rounder( c1_t, sample_unit );
-          rts += [indent+"C1 = %+0.3f %s" % ( a,b )];
-
         if self.cursor_list[1].visible and sample_unit != None and sample_period != None:
           c2_i = float( self.cursor_list[1].x / x_space ) + samples_start_offset - trigger_index;
           c2_t = c2_i * sample_period;
-          (a,b) = time_rounder( c2_t, sample_unit );
-          rts += [indent+"C2 = %+0.3f %s" % ( a,b )];
 
-        self.cursor_list[0].delta_txt = None;
         if self.cursor_list[0].visible and self.cursor_list[1].visible:
           if sample_period != None and sample_unit != None:
             c12_t_delta = abs( c1_t - c2_t );# Delta in time
             (a,b) = time_rounder( c12_t_delta, sample_unit );
-#           txt = delta+"T = %0.1f %s" % ( a,b);
-            txt =           "%0.1f %s" % ( a,b);
+            txt = "%0.1f%s" % ( a,b);
             self.cursor_list[0].delta_txt = txt;
-#           print("Oy");
-            rts += [indent+delta+" = " + txt];
-#           rts += [indent+delta+txt];
-#           rts += [indent+txt];
+#           rts += [indent+delta+" = " + txt];
+            txt  = indent+delta+txt;
+
+        if self.cursor_list[0].visible or self.cursor_list[1].visible:
+          rts += ["Cursors:" + txt];
+
+        if self.cursor_list[0].visible and sample_unit != None and sample_period != None:
+          (a,b) = time_rounder( c1_t, sample_unit );
+          rts += [indent+"C1: %+0.3f%s" % ( a,b )];
+
+        if self.cursor_list[1].visible and sample_unit != None and sample_period != None:
+          (a,b) = time_rounder( c2_t, sample_unit );
+          rts += [indent+"C2: %+0.3f%s" % ( a,b )];
+
       elif x_space == 0:
         # This will happen if you collapse all the signals and the cursors are on.
 #       print("ERROR-948 : Divide-by-zero on x_space == %d" % x_space );
@@ -1822,22 +1856,23 @@ def proc_acq_adj( self, step ):
 # a (x,y,w,h) tuple of the rectangle area that the text occupies
 # bold_i is the selected text line, if any, that the user may modify value.
 def display_raw_text( self, txt_list, position, bold_i ):
+# HERE52
   (x,y) = position;
   x1 = x;
-  y1 = y + self.txt_height/3;
-  h = self.txt_height / 3; w = 0;
+  y1 = y + self.txt_toolbar_height/3;
+  h = self.txt_toolbar_height / 3; w = 0;
   for (i,each_line) in enumerate(txt_list):
     clr = self.color_fg;
     if bold_i != None:
-      self.font.set_bold( i == bold_i );
-      self.font.set_underline( i == bold_i );
+      self.font_toolbar.set_bold( i == bold_i );
+      self.font_toolbar.set_underline( i == bold_i );
       if i == bold_i:
         clr = self.color_selected;
 #   txt = self.font.render( each_line,True, self.color_white );
-    txt = self.font.render( each_line,True, clr );
+    txt = self.font_toolbar.render( each_line,True, clr );
     self.screen.blit(txt, (x1,y1) );
-    y1 += self.txt_height;
-    h += self.txt_height;
+    y1 += self.txt_toolbar_height;
+    h += self.txt_toolbar_height;
     if txt.get_width() > w:
       w = txt.get_width();
   return ( x,y,w,h);
@@ -2180,6 +2215,16 @@ def convert_object_id_to_tool_tip( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Load_PZA"    : cmd_str = "load_pza";
   elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
   elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
+  elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
+  elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
+  elif id_str == "#Controls.#Acquisition.#Save_List"   : cmd_str = "save_list";
+  elif id_str == "#Controls.#Acquisition.#Save_View"   : cmd_str = "save_view";
+
+# elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
+# elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
+# elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
+
   elif id_str == "#Controls.#Acquisition.#UUT"         : cmd_str = "load_uut";
   elif id_str == "#Controls.#Acquisition.#Target"      : cmd_str = "load_uut";
   elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
@@ -2198,23 +2243,25 @@ def convert_object_id_to_tool_tip( self, id_str ):
   elif id_str == "#Controls.#Display.#Search->"        : cmd_str = "search_forward";
   elif id_str == "#Controls.#Display.#<-Pan"           : cmd_str = "pan_left";
   elif id_str == "#Controls.#Display.#Pan->"           : cmd_str = "pan_right";
-  elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
-  elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
+# elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
+# elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
 # elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
-  elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
-  elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
   elif id_str == "#Controls.#Display.#TimeSnap"        : cmd_str = "time_snap";
   elif id_str == "#Controls.#Display.#TimeLock"        : cmd_str = "time_lock";
+
   elif id_str == "#Controls.#Display.#MaskSig"         : cmd_str = "mask_toggle_signal";
   elif id_str == "#Controls.#Display.#HideSig"         : cmd_str = "hide_toggle_signal";
   elif id_str == "#Controls.#Display.#CopySig"         : cmd_str = "copy_signal";
   elif id_str == "#Controls.#Display.#PasteSig"        : cmd_str = "paste_signal";
   elif id_str == "#Controls.#Display.#DeleteSig"       : cmd_str = "delete_signal";
   elif id_str == "#Controls.#Display.#CutSig"          : cmd_str = "cut_signal";
-# elif id_str == "#Controls.#Display.#InsertSig"       : cmd_str = "insert_signal";
-# elif id_str == "#Controls.#Display.#CloneSig"        : cmd_str = "clone_signal";
   elif id_str == "#Controls.#Display.#Font++"          : cmd_str = "font_larger";
   elif id_str == "#Controls.#Display.#Font--"          : cmd_str = "font_smaller";
+
+# elif id_str == "#Controls.#Display.#InsertSig"       : cmd_str = "insert_signal";
+# elif id_str == "#Controls.#Display.#CloneSig"        : cmd_str = "clone_signal";
 
   rts = []; text = None;
   if cmd_str == "help":
@@ -2348,6 +2395,10 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Save_PZA"    : cmd_str = "save_pza";
   elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
 # elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
+  elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
+  elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
+  elif id_str == "#Controls.#Acquisition.#Save_List"   : cmd_str = "save_list";
+  elif id_str == "#Controls.#Acquisition.#Save_View"   : cmd_str = "save_view";
   elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
   elif id_str == "#Controls.#Views.#RemoveAll"         : cmd_str = "remove_view_all";
   elif id_str == "#Controls.#Display.#ZoomIn"          : cmd_str = "zoom_in";
@@ -2358,23 +2409,35 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Display.#Search->"        : cmd_str = "search_forward";
   elif id_str == "#Controls.#Display.#<-Pan"           : cmd_str = "pan_left";
   elif id_str == "#Controls.#Display.#Pan->"           : cmd_str = "pan_right";
-  elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
-  elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
+# elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
+# elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
 # elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
-  elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
-  elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
   elif id_str == "#Controls.#Display.#TimeSnap"        : cmd_str = "time_snap";
   elif id_str == "#Controls.#Display.#TimeLock"        : cmd_str = "time_lock";
-  elif id_str == "#Controls.#Display.#MaskSig"         : cmd_str = "mask_toggle_signal";
-  elif id_str == "#Controls.#Display.#HideSig"         : cmd_str = "hide_toggle_signal";
-  elif id_str == "#Controls.#Display.#CopySig"         : cmd_str = "copy_signal";
-  elif id_str == "#Controls.#Display.#PasteSig"        : cmd_str = "paste_signal";
-  elif id_str == "#Controls.#Display.#DeleteSig"       : cmd_str = "delete_signal";
-  elif id_str == "#Controls.#Display.#CutSig"          : cmd_str = "cut_signal";
+
+  elif id_str == "#Controls.#Views.#MaskSig"           : cmd_str = "mask_toggle_signal";
+  elif id_str == "#Controls.#Views.#HideSig"           : cmd_str = "hide_toggle_signal";
+  elif id_str == "#Controls.#Views.#CopySig"           : cmd_str = "copy_signal";
+  elif id_str == "#Controls.#Views.#PasteSig"          : cmd_str = "paste_signal";
+  elif id_str == "#Controls.#Views.#DeleteSig"         : cmd_str = "delete_signal";
+  elif id_str == "#Controls.#Views.#CutSig"            : cmd_str = "cut_signal";
+  elif id_str == "#Controls.#Views.#Font++"            : cmd_str = "font_larger";
+  elif id_str == "#Controls.#Views.#Font--"            : cmd_str = "font_smaller";
+
+# elif id_str == "#Controls.#Display.#MaskSig"         : cmd_str = "mask_toggle_signal";
+# elif id_str == "#Controls.#Display.#HideSig"         : cmd_str = "hide_toggle_signal";
+# elif id_str == "#Controls.#Display.#CopySig"         : cmd_str = "copy_signal";
+# elif id_str == "#Controls.#Display.#PasteSig"        : cmd_str = "paste_signal";
+# elif id_str == "#Controls.#Display.#DeleteSig"       : cmd_str = "delete_signal";
+# elif id_str == "#Controls.#Display.#CutSig"          : cmd_str = "cut_signal";
+# elif id_str == "#Controls.#Display.#Font++"          : cmd_str = "font_larger";
+# elif id_str == "#Controls.#Display.#Font--"          : cmd_str = "font_smaller";
+
+
 # elif id_str == "#Controls.#Display.#InsertSig"       : cmd_str = "insert_signal";
 # elif id_str == "#Controls.#Display.#CloneSig"        : cmd_str = "clone_signal";
-  elif id_str == "#Controls.#Display.#Font++"          : cmd_str = "font_larger";
-  elif id_str == "#Controls.#Display.#Font--"          : cmd_str = "font_smaller";
 
   # Unselect active window when the bd_shell title bar is clicked so that
   # the arrow keys don't pan and zoom while you are typing
@@ -2580,6 +2643,7 @@ def update_cursors_to_mouse( self ):
 #       if each_cur.visible:
 #         print( each_cur.x, cur_i );
 
+  self.refresh_waveforms = True;
   self.refresh_cursors = True;
   return;
 
@@ -2633,6 +2697,15 @@ def draw_digital_lines( self, my_window ):
 
   w = my_surface.get_width();
   h = my_surface.get_height();
+
+
+# if ( my_window.samples_shown != None and
+#      my_window.samples_total != None     ):
+#   start = ( ( my_window.samples_start_offset ) / my_window.samples_total );
+#   stop  = ( ( (my_window.samples_start_offset+my_window.samples_shown)/ my_window.samples_total));
+#   print( start, stop );
+#       if samples_to_draw != 0:
+#         rle_time_to_pixels = float( w / samples_to_draw ); # ratio that converts time in ps to pixels
 
   # Draw the trigger
   if my_trigger_x != None:
@@ -2702,6 +2775,8 @@ def draw_digital_lines( self, my_window ):
             except:
               log(self,["ERROR-2041 (%s,%s)" % (x1,int(y1+txt_y_offset))]);
 
+
+
   # Draw the signal names - 1st drawing a black box beneath. 
   # Don't draw if spacing is less than font height
   assigned  = len( self.container_view_list )-2;
@@ -2756,15 +2831,15 @@ def draw_digital_lines( self, my_window ):
       if each_sig.selected:
         self.font.set_bold( True  );# Bold for selected signal
         self.font.set_underline( True );
-        txt = "["+txt+"]";
+#       txt = "["+txt+"]";
+        txt =     txt;
       txt = txt + each_sig.offscreen;
 
 
       # While in Acquisition display, triggerable signals in bold italic
-      if self.container_acquisition_list[0].visible == True:
-        self.font.set_bold( each_sig.triggerable );
-        self.font.set_italic( each_sig.triggerable );
-#       self.font.set_strikethrough( each_sig.triggerable );
+#     if self.container_acquisition_list[0].visible == True:
+#       self.font.set_bold( each_sig.triggerable );
+#       self.font.set_italic( each_sig.triggerable );
         
       # Now render the text with the specified font
       txt = self.font.render(txt,True, sig_color     );
@@ -2784,7 +2859,9 @@ def draw_digital_lines( self, my_window ):
       w1 = txt.get_width();
       h1 = txt.get_height();
       if each_sig.type != "spacer":
-        self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(x1,y1,w1,h1) );
+# 2024.12.17
+        self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(0,y1-1,(x1+w1),h1+1) );
+#       self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(x1,y1,w1,h1) );
         my_surface.blit(txt, (x1,y1) );
 
 #     y += y_space; i += 1;
@@ -2799,6 +2876,16 @@ def draw_digital_lines( self, my_window ):
     else:
       i += 1;# Have to increment i since we can start with signals scrolled offscreen
       each_sig.name_rect = None;
+ 
+  y_scrolled_stats = None; 
+  try:
+    a = len( my_draw_list ); # Total
+    b = int( my_window.y_offset / y_space );# Culled at top
+    c = int(h / y_space );# Drawn in Center
+#   print( b, c, ( a-b-c ), a );
+    y_scrolled_stats = (a,b,c);# Total, Culled at top (neg), Drawn in Center
+  except:  
+    pass;
 
   # draw zoom pinch lines - which are a lot like cursor lines
   if self.container_display_list[0].visible and self.window_selected != None and \
@@ -2898,7 +2985,44 @@ def draw_digital_lines( self, my_window ):
                   log(self,["ERROR-2119"]);
               last_x = x;
               last_txt = txt;
-        
+
+  # Draw RLE Time Range in upper right corner #HERE99 and Window Number in upper left corner
+  my_color = self.color_fg;
+  my_window_name_drawn = False;
+  if self.window_selected != None:
+    my_win = self.window_list[self.window_selected];
+    if my_win == my_window:
+      my_color = self.color_selected;
+
+  if my_window.rle_time_range != None:
+    (a,b,c,d) = my_window.rle_time_range;
+    txt = "[%0.1f%s,%+0.1f%s] " % ( a,b,c,d );
+    txt = self.font.render(txt,True, my_color );
+    w1 = txt.get_width();
+    h1 = txt.get_height();
+    self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect((w-w1),0,w1,h1) );
+    my_surface.blit(txt, (w-w1,0));
+
+  if y_scrolled_stats != None:
+    (a,b,c) = y_scrolled_stats; # Total, Culled at top (neg), Drawn in Center
+    if b != 0:
+      d = abs(b)+c;
+      if d > a:
+        d = a;
+      txt = "%s [%d:%d]of[0:%d] " % (my_window.name, abs(b),d,a);
+      txt = self.font.render(txt,True, my_color );
+      w1 = txt.get_width();
+      h1 = txt.get_height();
+      self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(0,0,w1,h1) );
+      my_surface.blit(txt, (0,0));
+      my_window_name_drawn = True;
+  if not my_window_name_drawn:
+    txt = my_window.name;# Window number 1,2 or 3
+    txt = self.font.render(txt,True, my_color );
+    w1 = txt.get_width();
+    h1 = txt.get_height();
+    self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(0,0,w1,h1) );
+    my_surface.blit(txt, (0,0));
 
   my_image.set_image( my_surface );
   return;
@@ -2957,6 +3081,8 @@ def create_drawing_lines( self, my_win ):
   trigger_x = None;
   rle_time_to_pixels = None;
   y_space = 0;
+  rle_min_max = None;
+  my_win.rle_time_range = None;
 
   # self.txt_height = txt.get_height();
   # y_space is spacing between slots. Maximum is 2x the font height. There is no minimum.
@@ -3001,6 +3127,7 @@ def create_drawing_lines( self, my_win ):
       if each_sig.source != None:
         if "digital_rle" in each_sig.source:
           type_rle = True;
+          break;
 
   if len( my_sig_list ) != 0:
     if not type_rle:
@@ -3008,8 +3135,12 @@ def create_drawing_lines( self, my_win ):
       samples_to_draw = max([ len(each.values) for each in my_sig_list ]);# list comprehension
     else:
       rle_flat_time_list = [];
-#     for each_sig in my_sig_list:
-#       rle_flat_time_list += each_sig.rle_time;# List of all the times of all the signals
+# New 2024.12.16 : This doesn't work as the short time is never displayed relative to long
+# time from two RLE pods in two different windows. This means that "zoom_full" is always
+# relative to the longest RLE capture. This is better than alternative of never seeing short
+# time relative to long time
+#     if True:
+#       each_win = my_win;
       for each_win in self.window_list:
         if each_win.timezone == "rle":
           for each_sig in each_win.signal_list:
@@ -3022,6 +3153,9 @@ def create_drawing_lines( self, my_win ):
         my_win.samples_total = rle_time_total;
         my_win.trigger_index = abs(rle_time_min);
         samples_to_draw = abs(rle_time_min) + rle_time_max;# Actually time in ps to draw
+#       print( rle_time_min, rle_time_max );
+        #HERE100
+        rle_min_max = ( rle_time_min, rle_time_max );
       else:
         samples_to_draw = 0;
 
@@ -3137,6 +3271,17 @@ def create_drawing_lines( self, my_win ):
             rle_value_time_pairs += [ ( each_value, rle_time-samples_start_offset )];
           prev_rle_time  = rle_time;
           prev_rle_value = each_value;
+        #HERE101
+        if rle_min_max != None and self.screen_window_rle_time == 1:
+          ( rle_time_min, rle_time_max ) = rle_min_max;
+          t_start = rle_time_min+samples_start_offset;
+          t_stop =  rle_time_min+samples_start_offset+samples_to_draw;
+          sample_unit = "ps";
+          (a,b) = time_rounder( t_start , sample_unit );
+          (c,d) = time_rounder( t_stop  , sample_unit );
+          my_win.rle_time_range = ( a,b,c,d );
+#          print( rle_time_min+samples_start_offset, rle_time_min+samples_start_offset+samples_to_draw );
+#         print( a,b,c,d );
 
 
       # Calculate the visible sample index where the trigger is - just once
@@ -3810,8 +3955,10 @@ def init_widgets(self):
   rect = self.container_list[1].relative_rect;# Get dimensions based on screen size
   y_top = 0;# Keep track of where to draw each container based on height of last
 
-  button_txt_list = [ "Acquisition", "Display",
-                      "Views",       "Help",    ];
+# button_txt_list = [ "Acquisition", "Display",
+#                     "Views",       "Help",    ];
+  button_txt_list = [ "Acquisition", "Navigation",
+                      "ViewConfig",  "Help",    ];
   y_top += container_builder_main_menu(self, rect, y_top,  button_txt_list);
 
   self.y_top = y_top;
@@ -3821,17 +3968,27 @@ def init_widgets(self):
                       "Arm",         "Acquire",
                       "Query",       "Download",
                       "Force_Trig",  "Force_Stop",    
+                      "Set_Trigs",   "Clr_Trigs",
                       "",
                       "Save_PZA",    "Load_PZA",
                       "Save_VCD",    "Load_VCD",
-                      "",
-                      "Set_Trigs",   "Clr_Trigs",
+                      "Save_PNG",    "Save_JPG",      
+                      "Save_List",   "Save_View",      
                     ];
 
   y_top += container_builder_acquisition( self, rect, self.y_top, button_txt_list );
 
 # button_txt_list = [ "Apply",       "Remove",   ];
-  button_txt_list = [ "Apply",       "Remove", 
+# button_txt_list = [ "Apply",       "Remove", 
+#                     "ApplyAll",    "RemoveAll",
+#                                                ];
+
+  button_txt_list = [ "Font--",       "Font++",
+                      "MaskSig",      "HideSig",     
+                      "CopySig",      "PasteSig",     
+                      "CutSig",       "DeleteSig",     
+                      "",
+                      "Apply",       "Remove", 
                       "ApplyAll",    "RemoveAll",
                                                  ];
 
@@ -3843,14 +4000,14 @@ def init_widgets(self):
   # Note the null strings provide some extra spacing for unrelated
   button_txt_list = [ "Window-1",     "Window-2",     
                       "Window-3",     "bd_shell",
-                      "Font--",       "Font++",
-                      "",
-                      "Save_PNG",     "Save_JPG",      
-                      "Save_List",    "Save_View",      
-                      "",
-                      "MaskSig",      "HideSig",     
-                      "CopySig",      "PasteSig",     
-                      "CutSig",       "DeleteSig",     
+#                     "Font--",       "Font++",
+#                     "",
+#                     "Save_PNG",     "Save_JPG",      
+#                     "Save_List",    "Save_View",      
+#                     "",
+#                     "MaskSig",      "HideSig",     
+#                     "CopySig",      "PasteSig",     
+#                     "CutSig",       "DeleteSig",     
                       "",
                       "TimeSnap",     "TimeLock",     
                       "Cursor-1",     "Cursor-2",     
@@ -3861,33 +4018,29 @@ def init_widgets(self):
 
   # Remove these buttons if the screen is really short. User will have to use
   # bd_shell CLI interface to get these features.
-  small_scrn_list = [ "Font--",       "Font++",
-                      "",
-                      "Save_List",    "Save_View",      
-                      "",
-                      "CopySig",      "PasteSig",     
-                      "CutSig",       "DeleteSig",     
-                      "TimeSnap",     "TimeLock",     
-                      "<-Search",     "Search->",      
-#                     "ZoomCurs",     "ZoomFull",      
-                      "",
-                     ];
-  really_small_scrn_list = [ 
-                             "CopySig",      "PasteSig",     
-                             "CutSig",       "DeleteSig",     
-#                            "DeleteSig",    "InsertSig",     
-#                            "ZoomIn",       "ZoomOut",      
-#                            "<-Pan",        "Pan->",
-                           ];
+# small_scrn_list = [ "Font--",       "Font++",
+#                     "",
+#                     "Save_List",    "Save_View",      
+#                     "",
+#                     "CopySig",      "PasteSig",     
+#                     "CutSig",       "DeleteSig",     
+#                     "TimeSnap",     "TimeLock",     
+#                     "<-Search",     "Search->",      
+#                     "",
+#                    ];
+# really_small_scrn_list = [ 
+#                            "CopySig",      "PasteSig",     
+#                            "CutSig",       "DeleteSig",     
+#                          ];
 
-  screen_height_small = int( self.vars["screen_height_small"], 10 );
-  if self.screen_height <= ( screen_height_small * 1.2 ):
-    for each in small_scrn_list:
-      button_txt_list.remove( each );
+# screen_height_small = int( self.vars["screen_height_small"], 10 );
+# if self.screen_height <= ( screen_height_small * 1.2 ):
+#   for each in small_scrn_list:
+#     button_txt_list.remove( each );
 
-  if self.screen_height <= (screen_height_small/2):
-    for each in really_small_scrn_list:
-      button_txt_list.remove( each );
+# if self.screen_height <= (screen_height_small/2):
+#   for each in really_small_scrn_list:
+#     button_txt_list.remove( each );
 
   y_top += container_builder_display(self, rect, self.y_top, button_txt_list);
 
@@ -3957,8 +4110,12 @@ def container_builder_main_menu( self, rect, y_top, button_txt_list ):
   for each in button_txt_list:
     x1 = x + ( col * w ) + ( col*margin*2 );
     col += 1;
+    text = each;
+    object_id = "#"+each;
+    object_id = object_id.replace("Navigation","Display");
+    object_id = object_id.replace("ViewConfig","Views");
     self.main_menu_buttons += [ UIButton( relative_rect = pygame.Rect(x1,y,w,h),
-      text = each, object_id="#"+each, tool_tip_text = each+" Tool Tip",
+      text = text, object_id=object_id, tool_tip_text = each+" Tool Tip",
       visible = True, container = my_container, manager = self.ui_manager,
       allow_double_clicks = False) ];
     if ( col == 2 ):
@@ -3995,15 +4152,18 @@ def container_builder_views( self, rect, y_top, button_txt_list ):
     h = 20;
   col = 0;
   for each in button_txt_list:
-    x1 = x + ( col * w ) + ( col*margin*2 );
-    col += 1;
-    self.container_view_list += [ UIButton( relative_rect = pygame.Rect(x1,y,w,h),
-      text = each, object_id="#"+each, tool_tip_text = each+" Tool Tip",
-      visible = vis, container = my_container, manager = self.ui_manager,
-      allow_double_clicks = False) ];
-    if ( col == 2 ):
-      y += h + margin;
-      col = 0;
+    if each != "":
+      x1 = x + ( col * w ) + ( col*margin*2 );
+      col += 1;
+      self.container_view_list += [ UIButton( relative_rect = pygame.Rect(x1,y,w,h),
+        text = each, object_id="#"+each, tool_tip_text = each+" Tool Tip",
+        visible = vis, container = my_container, manager = self.ui_manager,
+        allow_double_clicks = False) ];
+      if ( col == 2 ):
+        y += h + margin;
+        col = 0;
+    else:
+      y += int(1.5 * margin);# Extra spacing between unrelated buttons
 
   x = margin; w = w1 - margin*6;
   h = ( h1 - y ) / 4;
@@ -4895,6 +5055,7 @@ def cmd_sump_force_stop( self ):
     self.sump.wr( self.sump.cmd_state_idle,  0x00000000 );
     self.sump.rd_status();
     self.mode_acquire = False;
+  self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright );
   return rts;
 
 
@@ -4917,7 +5078,7 @@ def cmd_sump_force_trig( self ):
 #   log( self, ["1"] );
     self.sump.rd_status();
     ( stat_str, status ) = self.sump.status;
-    print( stat_str );
+#   print( stat_str );
 #   if stat_str != "armed":
 #     log( self, ["2"] );
 #     log( self, ["Arming Sump Hardware"] );
@@ -5276,6 +5437,7 @@ def cmd_sump_connect( self ):
 
   a = [""];
   triggerable_list = [];
+  maskable_list = [];
   if len(self.sump.rle_hub_pod_list) != 0:
     a += ["RLE Hub+Pod Configuration"];
     a += ["sump3_core"];
@@ -5300,7 +5462,7 @@ def cmd_sump_connect( self ):
       hub_name = hub_name.replace(" ","");
     else:
       hub_name = "%d" % hub;
-    a += ["  |"];
+#   a += ["  |"];
     a += ["  + Hub-%d : %s : %f MHz" % ( hub, hub_name, hub_ck_freq_mhz ) ];
     if hub == len(self.sump.rle_hub_pod_list)-1:
       t = " ";
@@ -5333,6 +5495,17 @@ def cmd_sump_connect( self ):
         if ( ( pod_triggerable & bit ) != 0x00000000 ):
           triggerable_list += ["digital_rle[%d][%d][%d]" % ( hub,pod,i ) ];
 
+#     print("pod_hw_cfg = %08x" % pod_hw_cfg );
+      if ( ( pod_hw_cfg & 0x00000010 ) != 0x00000000 ):
+        pod_maskable = 0xFFFFFFFF;
+      else:
+        pod_maskable = 0x00000000;
+#     print("pod_maskable = %08x" % pod_maskable );
+      for i in range(0,31):
+        bit = 2**i;
+        if ( ( pod_maskable & bit ) != 0x00000000 ):
+          maskable_list += ["digital_rle[%d][%d][%d]" % ( hub,pod,i ) ];
+
       pod_hw_rev    = ( pod_hw_cfg & 0xFF000000 ) >> 24;
       pod_view_rom_en = ( pod_hw_cfg & 0x00000002 ) >> 1;
       pod_num_addr_bits = ( pod_ram_cfg & 0x000000FF ) >> 0;
@@ -5341,12 +5514,8 @@ def cmd_sump_connect( self ):
       rle_ram_length = 2**pod_num_addr_bits;
       total_bits = pod_num_data_bits+pod_num_ts_bits+2;
       ram_kb = ( rle_ram_length * total_bits ) / 1024;
-#     ram_cfg = "%dx%d (%d+%d+%d)" % (rle_ram_length,total_bits,pod_num_data_bits,pod_num_ts_bits,2);
-#     ram_cfg = "%dx%d (%d+%d+%d)" % (rle_ram_length,total_bits,2,pod_num_ts_bits,pod_num_data_bits);
       ram_cfg = "%dx%d (%d+%d+%d) = %dKb" % (rle_ram_length,total_bits,2,pod_num_ts_bits,
         pod_num_data_bits,ram_kb);
-#     max_time = ((2**pod_num_ts_bits)/hub_ck_freq_mhz)/1000000;  
-#     a += ["  "+t+"   + Pod-%d : %s : %s : Max %0.6f Seconds" % ( pod, pod_name, ram_cfg, max_time )];
       a += ["  "+t+"   + Pod-%d : %s : %s" % ( pod, pod_name, ram_cfg )];
 
       max_time = ((2**pod_num_ts_bits)/hub_ck_freq_mhz)/1000000;
@@ -5427,6 +5596,9 @@ def cmd_sump_connect( self ):
       for each_triggerable in triggerable_list:
         if each_triggerable in new_each:
           new_line += " -triggerable True" 
+      for each_maskable in maskable_list:
+        if each_maskable in new_each:
+          new_line += " -maskable True" 
     view_rom_list += [ new_line ]; 
   
 # print("Triggerable List:");
@@ -5452,6 +5624,8 @@ def cmd_sump_connect( self ):
   file_path = self.vars["sump_path_dbg"];
   file_name = os.path.join( file_path,"hw_config.txt" );
   list2file( file_name, rts );
+  self.triggerable_list = triggerable_list;
+  self.maskable_list    = maskable_list;
   return rts;
 
 
@@ -7716,6 +7890,7 @@ class signal(object):
     self.rle_time        = [];  # For RLE signals, each value has a time
     self.trigger         = False;
     self.triggerable     = False;# Only 32 Event Binary and Analog CHs can be triggers
+    self.maskable        = False;# Only 32 Event Binary in RLE Pods can be maskable    
     self.trigger_field   = 0x00000000;# the 1 of 32 trigger bits
     self.trigger_index   = None;# Sample index, like 0 or 205, to where trigger occurred.
     self.selected        = False;
@@ -7761,6 +7936,7 @@ class window(object):
     self.y_offset        = 0;# Vertical offset for samples to be drawn at
     self.zoom_pan_list   = ( 1.0,0,0 );
     self.zoom_pan_history = [];
+    self.rle_time_range  = None;# ( float, units, float, units )
     self.sample_period   = None;# inherited from child signal
     self.sample_unit     = None;# inherited from child signal
     self.trigger_index   = None;# inherited from child signal
@@ -8182,7 +8358,7 @@ class sump3_hw:
               rip_list += [ "create_signal %s -source %s[%d:%d]" % ( sig_name, view_name, stop_index, start_index )];
             bits_remaining -= entity_size;
             start_index += entity_size;
-          print( rip_list );
+#         print( rip_list );
           rip_list.reverse();# Place top numbers on top
           self.no_view_rom_list += rip_list;
         # Default to bits
@@ -8198,7 +8374,7 @@ class sump3_hw:
     for (i,each_pod_list) in enumerate( hub_list ):
       for (j,each_pod) in enumerate( each_pod_list ):
         # 1,0 1.0.clk_100.0.0.u2_pod
-        print("%d,%d %s" % ( i,j,each_pod) );
+#       print("%d,%d %s" % ( i,j,each_pod) );
         # Make a name only dictionary like this foo["clk_100.u2_pod"] = (1,0)
         words = each_pod.split(".") + [None] * 8; # Avoid IndexError
         self.rle_hub_pod_dict[ words[2]+"."+words[5] ] = (i,j);
@@ -8269,7 +8445,7 @@ class sump3_hw:
 #         self.parent.log( ["ERROR-5552368 : Invalid '*' in: %s" % ( each ) ]);
 #         print( "ERROR-5552368 : Invalid '*' in: %s" % ( each ) );
 #         new_list += [ each ];
-        print("top_type == %s" % top_type );
+#       print("top_type == %s" % top_type );
       if not parsing_jk:
         new_list += [ each ];
       else:
@@ -8280,11 +8456,11 @@ class sump3_hw:
 #       if ( "end_source" in each or "end_view" in each ):
         if ( "create_group" in each and top_type == "end_group" ):
           group_cnt += 1;# Keep track of group hierarchy
-          print("group_cnt = %d" % group_cnt );
+#         print("group_cnt = %d" % group_cnt );
 
         if ( top_type in each and top_type == "end_group" ):
           group_cnt -= 1;# Keep track of group hierarchy
-          print("group_cnt = %d" % group_cnt );
+#         print("group_cnt = %d" % group_cnt );
 
         if ( top_type in each and top_type != "" and group_cnt == 0 ):
 #         print("Oy! %s" % each )
@@ -8435,7 +8611,7 @@ class sump3_hw:
         rom_dword_cnt = len(data_list);
         a = 100 * float( rom_dword_cnt / rom_length );
         b = rom_length * 32 / 1024;
-        print("ROM Size is %02f%% full of %d Kbits" % ( a, b) );
+        print("ROM Size is %02.0f%% full of %d Kbits" % ( a, b) );
 
         for each_dword in data_list:
           byte_list = self.dword2bytes( each_dword );
@@ -8877,6 +9053,8 @@ def init_globals( self ):
   self.tool_top_tick_time = None;# PyGame tick_time in mS that hover event happened
   self.path_to_uut = None;# Note, this is selected UUTs file path, not the env var sump_path_uut
   self.signal_list = [];
+  self.triggerable_list = [];
+  self.maskable_list = [];
   self.user_ctrl_assigned_list = [];
   self.last_scroll_wheel_tick = 0;
   self.has_focus = True;
@@ -8978,6 +9156,7 @@ def init_vars( self, file_ini ):
   vars   = {}; # Variable Dictionary
   vars["font_name"] = "dejavusansmono";
   vars["font_size"] = "16";
+  vars["font_size_toolbar"] = "16";
   vars["file_log"]  = "sump3_log.txt";
   vars["debug_mode"                ] = "False";
   vars["tool_tips_on_hover"        ] = "0";
@@ -8998,6 +9177,7 @@ def init_vars( self, file_ini ):
   vars["screen_height_small"       ] = "600";
 # vars["screen_windows"            ] = "F";# 4 bits for which windows are visible
   vars["screen_windows"            ] = "9";# 4 bits for visible windows. 9 = Win1 + bd_shell
+  vars["screen_window_rle_time"    ] = "1";# Draw RLE Time range in upper right of windows  
   vars["screen_console_height"     ] = "300";# bd_shell console height
   vars["bd_connection"             ] = "tcp";
   vars["bd_protocol"               ] = "poke";
@@ -9072,11 +9252,11 @@ def init_vars( self, file_ini ):
   vars["scroll_wheel_pan_reversed"  ] = "0";
   vars["scroll_wheel_zoom_en"       ] = "1";
 
-  self.var_save_list = ["font_name","font_size","file_log","debug_mode","tool_tips_on_hover",
+  self.var_save_list = ["font_name","font_size","font_size_toolbar","file_log","debug_mode","tool_tips_on_hover",
     "screen_color_background","screen_color_foreground","screen_color_selected",
     "screen_color_trigger","screen_color_triggerable","screen_color_cursor",
     "screen_x", "screen_y","screen_save_position",
-    "screen_width","screen_height", "screen_windows","screen_console_height",
+    "screen_width","screen_height", "screen_windows","screen_window_rle_time","screen_console_height",
     "bd_connection","bd_protocol","bd_server_ip","bd_server_socket",
     "aes_key", "aes_authentication",
     "sump_script_startup","sump_script_triggered","sump_script_shutdown",
@@ -9210,7 +9390,7 @@ def list2file( file_name, my_list, concat = False ):
     type = 'a';
   else:
     type = 'w';
-  print( file_name, type );
+# print( file_name, type );
   file_out  = open( file_name, type );
   for each in my_list:
     file_out.write( each + "\n" );
@@ -9367,13 +9547,31 @@ def cmd_create_bit_group( self, words ):
           for i in range( bit_top, bit_bot-1, -1 ):
             signal_name = group_name_short + "[%d]" % (i-bit_offset);
             source_name = source_name_short + "[%d]" % (i);
+
+            # Punt and enable triggerable and maskable for bits 0-31
             if i <= 31:
               triggerable = "True";
+              maskable    = "True";
             else:
               triggerable = "False";
-            txt = "create_signal %s -source %s -triggerable %s" % \
-              ( signal_name, source_name, triggerable );
-#           log( self, ["cmd_create_bit_group() : %s" % txt ] );
+              maskable    = "False";
+
+#           # This doesnt work, why?
+#           # triggerable_list is "digital_rle[0][0][6]"
+#           # source_name      is "ck100_hub.u1_pod.3[6]" ( for generate )
+#           triggerable = "False";
+#           maskable    = "False";
+#           for each_triggerable in self.triggerable_list:
+#             print( each_triggerable, source_name );
+#             if each_triggerable in source_name:
+#               triggerable = "True";
+#           for each_maskable in self.maskable_list:
+#             if each_maskable in source_name:
+#               maskable = "True";
+
+            txt = "create_signal %s -source %s -triggerable %s -maskable %s" % \
+              ( signal_name, source_name, triggerable, maskable );
+#           print( txt );
             proc_cmd( self, txt, quiet = True );
         except:
           log( self, ["ERROR: cmd_create_bit_group()"] );
@@ -9669,6 +9867,7 @@ def cmd_list_signal( self, words ):
       rts += ["-user_ctrl %s" % each_sig.user_ctrl_list ];
       rts += ["-sample_period  %s" % each_sig.sample_period   ];
       rts += ["-sample_unit    %s" % each_sig.sample_unit     ];
+      rts += ["-maskable       %s" % each_sig.maskable        ];
       rts += ["-triggerable    %s" % each_sig.triggerable     ];
       rts += ["-trigger_field %08x" % each_sig.trigger_field   ];
       if each_sig.member_of != None:
@@ -9822,7 +10021,8 @@ def cmd_mask_toggle_signal( self, words ):
   rts = [];
   if words[1] == None:
     for each_sig in self.signal_list:
-      if each_sig.selected:
+#     if each_sig.selected:
+      if each_sig.selected and each_sig.maskable:
         each_sig.selected = False;
         each_sig.rle_masked = not each_sig.rle_masked;
         self.refresh_waveforms = True;
@@ -9889,7 +10089,7 @@ def cmd_collapse_group( self, words ):
     signal_list_names = [ each.name for each in self.signal_list ];# all the names
     signal_list_names = star_match( words[1], signal_list_names );
   for each_name in signal_list_names:
-    print(each_name);
+#   print(each_name);
     for each_sig in self.signal_list:
       if each_name == each_sig.name:
 #       each_sig.collapsed = True;
@@ -9948,15 +10148,16 @@ def copy_signal_obj( self, src_sig ):
 
 
 #####################################
-# Delete a signal from being shown <DEL> and also set rle_masked to True
+# Delete a signal from being shown <DEL> and also set rle_masked to True if maskable
 def cmd_delete_signal( self, words ):
   rts = [];
   if words[1] == None:
     for each_sig in self.signal_list:
       if each_sig.selected:
         each_sig.visible = False;
-        each_sig.rle_masked = True;
         each_sig.selected = False;
+        if each_sig.maskable:
+          each_sig.rle_masked = True;
         self.signal_delete_list += [ each_sig ];
   elif words[1] == "*":
     pass;
@@ -9964,7 +10165,8 @@ def cmd_delete_signal( self, words ):
     for ( i, each_sig ) in enumerate( self.signal_list ):
       if ( each_sig.name == words[1] ):
         each_sig.visible = False;
-        each_sig.rle_masked = True;
+        if each_sig.maskable:
+          each_sig.rle_masked = True;
         self.signal_delete_list += [ each_sig ];
   self.refresh_waveforms = True;
   return rts;
@@ -11568,7 +11770,7 @@ def cmd_save_vcd( self, words ):
           os.system("%s %s %s" % ( vcd_viewer_path, vcd_file, gtkw_file ));
         except:
           rts += ["ERROR: ( vcd_viewer_path, vcd_file ) %s %s" % ( vcd_viewer_path, vcd_file )];
-  print("3");
+# print("3");
   return rts;
 
 
@@ -11718,7 +11920,7 @@ def cmd_save_view( self, words ):
   # Note: This attempts to save a view file in an order format that a human might write one.
   signal_list = self.window_list[win_num].signal_list;
   for each_sig in signal_list:
-    print( each_sig.name, each_sig.type );
+#   print( each_sig.name, each_sig.type );
     # If there is a group open, close it if the next item isn't a member of it
     if len(group_stack) != 0:
       if each_sig.member_of != group_stack[-1]:
@@ -11777,7 +11979,7 @@ def cmd_save_view( self, words ):
         txt += "-offset_units %s " % each_sig.offset_units;
         txt += "-units_per_code %s " % each_sig.units_per_code;
       else:
-        if each_sig.rle_masked == True:
+        if each_sig.rle_masked == True and each_sig.maskable:
           txt += "-rle_masked %s " % each_sig.rle_masked;
 
     if each_sig.member_of != None:
@@ -11893,6 +12095,8 @@ def assign_signal_attribute_by_name( self, new_signal, attribute, value ):
     new_signal.hidden = ( value.lower() in ["true","yes","1"]);
   elif attribute == "triggerable"     :
     new_signal.triggerable = ( value.lower() in ["true","yes","1"]);
+  elif attribute == "maskable"     :
+    new_signal.maskable = ( value.lower() in ["true","yes","1"]);
   elif attribute == "color"           : new_signal.color = color_lookup(value);
   elif attribute[0:9] == "user_ctrl":
     new_signal.user_ctrl_list += [(attribute[9:],value)];
@@ -12999,15 +13203,15 @@ def init_manual( self ):
   a+=["  By default sump3.py will display three Windows for signal viewing  "];
   a+=["  and support up to three different Timezones. Reducing the number of"];
   a+=["  of Windows displayed will increase the size of the visible Windows."];
-  a+=["  Click [Display] button and then [Window-n] where n is 1,2 or 3 to  "];
-  a+=["  individually turn the three Windows on and off.                    "];
+  a+=["  Click [Navigation] button and then [Window-n] where n is 1,2 or 3  "];
+  a+=["  to individually turn the three Windows on and off.                 "];
   a+=[" 8.5 Select the active Window.                                       "];
   a+=["  Only one Window may be active at a time and is indicated with a    "];
   a+=["  visible white outline. Toggling the <tab> key or clicking the mouse"];
   a+=["  button inside a Window will select it as the active Window.        "];
   a+=[" 8.6 Add View(s) to the active Window.                               "];
-  a+=["  Click [Views] and select one or more Views to then [Apply] to the  "];
-  a+=["  active Window. Repeat for all Windows that are enabled.            "];
+  a+=["  Click [ViewSetup] and select one or more Views to then [Apply] to  "];
+  a+=["  the active Window. Repeat for all Windows that are enabled.        "];
   a+=[" 8.7 Connect to the SUMP Hardware.                                   "];
   a+=["  Click [Acquisition] and then [Connect] to connect to the UUT SUMP  "];
   a+=["  hardware engine. If the connection is successful the bottom right  "];
@@ -13024,7 +13228,7 @@ def init_manual( self ):
   a+=["  triggered and acquired all post-trigger samples. Arm will not poll."];
   a+=["  If Arm was used, click [Download] once the hardware has triggered. "];
   a+=[" 8.11 View the acquisition results.                                  "];
-  a+=["  Click [Display] to see the results, add cursors, zoom-in, out, etc."];
+  a+=["  Click [Navigation] to see results, add cursors, zoom-in, out, etc. "];
   a+=[" 8.12 Save acquisition for offline viewing.                          "];
   a+=["  Click [Acquisition] then [Save_PZA] and specify the name for the   "];
   a+=["  *.pza file. [Load_PZA] may then be used to read it back in local   "];
@@ -13071,6 +13275,9 @@ def init_manual( self ):
   a+=["     8'hF4, 'ck100_hub.u1_pod',             // Signal source         "];
   a+=["     8'hF5, 'u1_pod_events',                // Top level group       "];
   a+=["       8'hF7, 16'd3, 16'd0, 'u1_pod_e[3:0]',// create_signal vector  "];
+  a+=["         8'hF8, 8'd0, 'st_reset',           // State Name            "];
+  a+=["         8'hF8, 8'd1, 'st_run',             // State Name            "];
+  a+=["         8'hF8, 8'd2, 'st_halt',            // State Name            "];
   a+=["       8'hF9, 16'd3, 16'd0, 'u1_pod_e[3:0]',// create_bit_group      "];
   a+=["       8'hF5, 'u1_pod_e[7:4]',              // Sub level group       "];
   a+=["         8'hF6, 16'd7, 'u1_pod_e[7]',       // create_signal bit     "];
@@ -13193,15 +13400,18 @@ def init_manual( self ):
   a+=["  remain completely open source while internal proprietary versions  "];
   a+=["  of bd_server.py may be created to communicate with closed source   "];
   a+=["  systems.                                                           "];
+  a+=["  Available at https://github.com/blackmesalabs/MesaBusProtocol      "];
   a+=["                                                                     "];
   a+=["    ------------           --------------           ---------------  "];
   a+=["   |  sump3.py  |<------->| bd_server.py |<------->| SUMP Hardware | "];
   a+=["    ------------  Ethernet --------------  USB,PCI  ---------------  "];
   a+=["                                                                     "];
   a+=["12.0 License                                                         "];
-  a+=[" This hardware and software is released under the GNU GPLv2 license. "];
-  a+=[" Full license is available at http://www.gnu.org                     "];
-  a+=["                                                                     "];
+  a+=[" This software is released under the GNU GPLv3 license.              "];
+  a+=["   Full license is available at http://www.gnu.org                   "];
+  a+=[" The hardware is released under CERN Open Hardware Licence v1.2.     "];
+  a+=["   Full license is available at http://ohwr.org/cernohl              "];
+  a+=[" SUMP3 HW+SW available at https://github.com/blackmesalabs/sump3     "];
   return a;
 
 
