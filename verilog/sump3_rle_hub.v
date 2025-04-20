@@ -44,6 +44,7 @@
 -- 0.11  11.20.23  khubbard Rev01 Trigger source added at 0x34
 -- 0.12  01.05.24  khubbard Rev01 Fixed 1st trigger being missed.
 -- 0.13  03.27.24  khubbard Rev01 Critical Path Timing opt in rd_sr mux.
+-- 0.14  01.07.25  khubbard Rev01 Don't leave armed state unless idle or rst
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -130,6 +131,7 @@ module sump3_rle_hub #
   reg                            lb_cs_data_cap_p1 = 0;
 
   reg   [5:0]                    cmd_reg_cap = 6'd0;
+  reg   [5:0]                    cmd_reg_cap_p1 = 6'd0;
   reg                            cmd_reg_new_cap = 0;
 
   reg                            mode_idle = 0;
@@ -170,6 +172,7 @@ module sump3_rle_hub #
   reg   [31:0]                   ctrl_37_reg = 32'h00000000;
   reg   [31:0]                   ctrl_38_reg = 32'h00000000;
   reg   [3:0]                    ctrl_35_reg = 4'h0;
+  wire                           reg_32_prevent_pod_access;
   wire                           reg_32_broadcast_all_controllers;
   wire                           reg_32_broadcast_all_pods;
   wire [7:0]                     reg_32_rle_controller_inst;
@@ -191,6 +194,7 @@ module sump3_rle_hub #
   wire [3:0]                     trigger_type; 
   reg                            user_bus_rd_loc = 0;
   reg                            user_bus_wr_loc = 0;
+  reg                            user_bus_queued_jk = 0;
 
 
   assign hub_ascii_name = ( hub_name_en == 1 ) ? hub_name : 96'd0;
@@ -416,8 +420,9 @@ end
 //   0x31 : Num RLE Pods - Read Number of RLE Pod Instance 
 //          D[8:0]   : Number of RLE Pods for this RLE Controller 0-256
 //   0x32 : RLE Pod - Write Instance + Register Address
-//          D[25]    : Broadcast Write to all RLE Controllers
-//          D[24]    : Broadcast Write to all Pod Instances
+//          D[26]    : Hub only Access ( user_bus, etc ). No Pod access.
+//          D[25]    : Broadcast Write to all RLE Hub Controllers
+//          D[24]    : Broadcast Write to all RLE Pod Instances
 //          D[23:16] : RLE Hub Instance     0-255
 //          D[15:8]  : Pod Instance         0-255
 //          D[7:0]   : Pod Register Address 0-255
@@ -451,11 +456,19 @@ always @ ( posedge clk_cap ) begin
   lb_cs_data_cap_p1 <= lb_cs_data_cap;
   user_bus_rd_loc   <= 0;
   user_bus_wr_loc   <= 0;
+  cmd_reg_cap_p1    <= cmd_reg_cap[5:0];
 
   cmd_reg_new_cap <= 0;
   if ( lb_wr_cap == 1 && lb_cs_ctrl_cap == 1 ) begin 
     cmd_reg_new_cap <= 1;// This will trigger read of selected cmd_reg
     cmd_reg_cap     <= lb_wr_d_cap[5:0]; 
+
+    // A single user_bus write during the armed state will be held off until
+    // the cmd_reg is put back in arm. Fixes a problem with trigger being off
+    if ( lb_wr_d_cap[5:0] == 6'h01 && user_bus_queued_jk == 1 ) begin
+      user_bus_wr_loc    <= 1;
+      user_bus_queued_jk <= 0;
+    end
   end 
   if ( lb_wr_cap == 1 && lb_cs_data_cap == 1 ) begin 
     if ( cmd_reg_cap == 6'h23 ) begin
@@ -470,13 +483,20 @@ always @ ( posedge clk_cap ) begin
     if ( cmd_reg_cap == 6'h37 ) begin
       ctrl_37_reg     <= lb_wr_d_cap[31:0];
       user_bus_rd_loc <= 1;
+      if ( cmd_reg_cap_p1 == 6'h01 ) begin
+        user_bus_queued_jk <= 1;// Hold off write until back in armed state
+      end
     end
     if ( cmd_reg_cap == 6'h38 ) begin
       ctrl_38_reg     <= lb_wr_d_cap[31:0];
-      user_bus_wr_loc <= 1;
+      if ( user_bus_queued_jk == 0 ) begin
+        user_bus_wr_loc <= 1;
+      end
     end
   end 
 end
+
+  assign reg_32_prevent_pod_access        = ctrl_32_reg[26];
   assign reg_32_broadcast_all_controllers = ctrl_32_reg[25];
   assign reg_32_broadcast_all_pods        = ctrl_32_reg[24];
   assign reg_32_rle_controller_inst       = ctrl_32_reg[23:16];
@@ -499,7 +519,7 @@ end
 always @ ( posedge clk_cap ) begin
   sump_is_armed <= mode_arm_p1;
   mode_idle     <= 0;
-  mode_arm      <= 0;
+//mode_arm      <= 0;
   mode_reset    <= 0;
   mode_init     <= 0;
   mode_idle_p1  <= mode_idle;
@@ -509,15 +529,18 @@ always @ ( posedge clk_cap ) begin
 
   if ( cmd_reg_cap == 6'h00 ) begin 
     mode_idle  <= 1;
+    mode_arm   <= 0;
   end 
   if ( cmd_reg_cap == 6'h01 ) begin 
     mode_arm   <= 1;
   end 
   if ( cmd_reg_cap == 6'h02 ) begin 
     mode_reset <= 1;
+    mode_arm   <= 0;
   end 
   if ( cmd_reg_cap == 6'h03 ) begin 
     mode_init  <= 1;
+    mode_arm   <= 0;
   end 
 end
 
@@ -574,10 +597,12 @@ always @ ( posedge clk_cap ) begin
 
     // Note these are all _p1 later as reg_32 is changing the clock cycle prior
     if ( lb_wr_cap_p1 == 1 && lb_cs_data_cap_p1 == 1 && cmd_reg_cap == 6'h33 ) begin
+      if ( reg_32_prevent_pod_access == 0 ) begin
         rle_pod_wr_shift_cnt <= 6'd44;
         rle_pod_wr_sr        <= { 4'b1101, reg_32_rle_pod_reg_addr[7:0], 
                                 lb_wr_d_cap_p1[31:0]                     };
         rle_pod_broadcast_jk <= reg_32_broadcast_all_pods;
+      end
     end
 
     // After reg_32 has been written ( and broadcast bits are valid ), issue
@@ -585,7 +610,8 @@ always @ ( posedge clk_cap ) begin
     if ( lb_wr_cap_p1 == 1 && lb_cs_data_cap_p1 == 1 && 
          cmd_reg_cap == 6'h32                           ) begin
       if ( reg_32_broadcast_all_controllers == 0  &&
-           reg_32_broadcast_all_pods == 0            ) begin
+           reg_32_broadcast_all_pods == 0         &&
+           reg_32_prevent_pod_access == 0            ) begin
         queue_pre_read_jk <= 1;
       end
     end
@@ -598,8 +624,9 @@ always @ ( posedge clk_cap ) begin
 
     if ( lb_rd_cap_p1 == 1 && lb_cs_data_cap_p1 == 1 && cmd_reg_cap == 6'h33 ) begin
       if (                                                        
-           ( reg_32_broadcast_all_controllers == 0 ) &&        
-           ( reg_32_broadcast_all_pods        == 0 )    ) begin
+            reg_32_broadcast_all_controllers == 0   &&        
+            reg_32_broadcast_all_pods == 0          &&
+            reg_32_prevent_pod_access == 0             ) begin
         rle_pod_wr_shift_cnt <= 6'd12;
         rle_pod_wr_sr        <= { 4'b1100, reg_32_rle_pod_reg_addr[7:0], 32'd0 };
         rle_pod_broadcast_jk <= 0;

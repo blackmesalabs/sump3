@@ -46,6 +46,12 @@
 --   0x14 : Read Trigger Source                                    
 --   0x15 : Read View ROM Size in 1Kb units                        
 --// 0x16 : Read User Status
+--
+--   0x1c : Thread Lock Set 
+--   0x1d : Thread Lock Clear
+--   0x1e : Thread Pool Set    
+--   0x1f : Thread Pool Clear  
+--
 --   0x20 : Load User Controls
 --   0x21 : Load Record Configuration Select
 --   0x22 : Load Tick Divisor 
@@ -58,7 +64,6 @@
 --   0x29 : Load Read Pointer
 --   0x2a : Load Dig Trigger Position ( Num Post Trig samples to capture ).
 --   0x2b : Load RAM Page Select
---// 0x2c : Load User Stimulus    
 --
 --   0x30 : RLE - Read Number of RLE Controller instances
 --   0x31 : RLE - Read Number of RLE Pod instances for selected controller
@@ -86,6 +91,8 @@
 -- 0.14  10.23.24  khubbard Rev01 Remove Digital HS. Put back user_ctrl for LS
 -- 0.15  10.30.24  khubbard Rev01 Deprecated user_stat, user_stim 
 -- 0.16  11.04.24  khubbard Rev01 Support for new hub param register at 0x3a
+-- 0.17  01.07.25  khubbard Rev01 Support user_bus access while armed.      
+-- 0.17  01.13.25  khubbard Rev01 Thread-Locking, Bus Busy Bit timer.    
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -96,6 +103,9 @@ module sump3_core #
    parameter ana_ram_depth_len  = 1024,
    parameter ana_ram_depth_bits = 10,
    parameter ana_ram_width      = 32, // Record width. Must be 32.
+   parameter thread_lock_en     = 1,
+   parameter bus_busy_timer_en  = 1,    // Set 1 to enable bus busy timer
+   parameter bus_busy_timer_len = 1023, // Number of bus clocks to wait 
 
    parameter rle_hub_num        = 1,  // Number of RLE Hubs (Clock Domains)
 
@@ -103,13 +113,14 @@ module sump3_core #
    parameter view_rom_size      = 16384,// In bits. 16K is nominal 512x32
    parameter view_rom_txt       = "",
 
-   parameter ck_freq_mhz        =  12'd80,    // u12.20 in MHz
-   parameter ck_freq_fracts     =  20'h00000, // ie, 80000 is 0.5 MHz
+   parameter ck_freq_mhz        = 12'd80,    // u12.20 in MHz
+   parameter ck_freq_fracts     = 20'h00000, // ie, 80000 is 0.5 MHz
 
-   parameter tick_freq_mhz      =  12'd1,     // u12.20 in MHz
-   parameter tick_freq_fracts   =  20'h00000, // 
-   parameter sump_id            =   8'h53, // aka S3
-   parameter sump_rev           =   8'h01
+   parameter tick_freq_mhz      = 12'd1,     // u12.20 in MHz
+   parameter tick_freq_fracts   = 20'h00000, // 
+   parameter sump_id            = 8'h53, // aka S3
+   parameter sump_rev           = 8'h01,
+   parameter sump_en            = 1     
 )
 (
   input  wire         clk_lb,
@@ -160,10 +171,11 @@ module sump3_core #
 // input  wire [dig_ram_width-1:0] dig_hs_bits,
 // output reg  [31:0]  user_ctrl = 0,
 // output reg  [31:0]  user_stim = 0
-   parameter dig_hs_enable      = 0;
-   parameter dig_ram_depth_len  = 256;
-   parameter dig_ram_depth_bits = 8;
-   parameter dig_ram_width      = 32;
+// Note: These 4 used to be input parameters
+   localparam dig_hs_enable      = 0;
+   localparam dig_ram_depth_len  = 256;
+   localparam dig_ram_depth_bits = 8;
+   localparam dig_ram_width      = 32;
    wire [dig_ram_width-1:0] dig_hs_bits;
 // reg  [31:0] user_ctrl;
 // reg  [31:0] user_stim;
@@ -179,6 +191,8 @@ module sump3_core #
   wire  [31:0]                   zeros;
   wire  [31:0]                   ones;
   reg   [31:0]                   dig_triggers_loc = 0;
+  wire                           lb_wr_loc;
+  wire                           lb_rd_loc;
 
   wire                           a_we;
   wire  [ana_ram_depth_bits-1:0] a_addr;
@@ -287,6 +301,11 @@ module sump3_core #
   reg   [31:0]                   ctrl_01_reg = 32'h00000000;
   reg   [31:0]                   ctrl_03_reg = 32'd250; // Tick Divisor
 
+//reg   [31:0]                   ctrl_1c_reg = 32'h00000000;// Thread Locking Stuff
+//reg   [31:0]                   ctrl_1d_reg = 32'h00000000;
+//reg   [31:0]                   ctrl_1e_reg = 32'h00000000;
+//reg   [31:0]                   ctrl_1f_reg = 32'h00000000;
+
   reg   [31:0]                   ctrl_20_reg = 32'h00000000;
   reg   [31:0]                   ctrl_21_reg = 32'h00000000;
   reg   [31:0]                   ctrl_22_reg = 32'h00000001;
@@ -299,7 +318,6 @@ module sump3_core #
   reg   [31:0]                   ctrl_29_reg = 32'h00000000;
   reg   [31:0]                   ctrl_2a_reg = 32'h00000000;
   reg   [31:0]                   ctrl_2b_reg = 32'h00000000;
-//reg   [31:0]                   ctrl_2c_reg = 32'h00000000;
   reg   [31:0]                   ctrl_32_reg = 32'h00000000;
   wire  [7:0]                    ctrl_32_rle_hub_inst;
   wire                           ctrl_32_rle_hub_broadcast;
@@ -341,9 +359,19 @@ module sump3_core #
   reg                            rle_pod_rd_bit = 0;
   reg   [5:0]                    rle_pod_rd_cnt = 6'd0;
   reg   [31:0]                   rle_pod_rd_sr = 32'd0;
+  reg   [31:0]                   thread_pool_reg = 32'd0;
+  wire  [31:0]                   thread_pool_readback;
+  reg                            thread_pool_jk  = 0;    
+  reg   [31:0]                   thread_lock_reg = 32'd0;
+  reg                            thread_lock_bit = 0;
+  reg   [11:0]                   bus_busy_cnt = 12'd0;
+  reg                            bus_busy_bit = 0;
 
   assign zeros = 32'h00000000;
   assign ones  = 32'hFFFFFFFF;
+
+  assign lb_wr_loc = ( sump_en == 1 ) ? lb_wr : 0;
+  assign lb_rd_loc = ( sump_en == 1 ) ? lb_rd : 0;
 
 
 //-----------------------------------------------------------------------------
@@ -367,6 +395,40 @@ endgenerate
 // an offset relative to that incremented address.
 //-----------------------------------------------------------------------------
   assign dwords_per_record[7:0] = rec_cfg_profile[31:24];
+
+
+//-----------------------------------------------------------------------------
+// In theory, if CPUs and software clients gets faster in time, they could
+// access the local bus much faster than the MISO/MOSI buses to RLE Hubs + Pods
+// This optional timer starts at the beginning of any local bus cycle and sets
+// a busy bit until the timer expires. Software would need to read the ctrl_reg
+// and check the busy_bit before accessing any other register.
+// This feature is disabled by default as bd_server.py appears to be the 
+// bottleneck in the year 2025. This may change over time. Future proofing HW.
+//-----------------------------------------------------------------------------
+always @ ( posedge clk_lb ) begin : proc_lb_busy_timer
+  if ( bus_busy_cnt != 12'd0 ) begin
+    bus_busy_cnt <= bus_busy_cnt[11:0] - 1;
+    bus_busy_bit <= 1;
+  end else begin
+    bus_busy_bit <= 0;
+  end
+
+  // Most bus accesses will start the timer. Reading bus_busy_bit is exception
+  if ( ( lb_wr_loc == 1 || lb_rd_loc == 1           ) && 
+       ( lb_cs_ctrl == 1 || lb_cs_data == 1 )    ) begin
+    // The busy_bit is in lb_cs_ctrl. Reading lb_cs_ctrl MUST NOT restart timer
+    if ( ~( lb_rd_loc == 1 && lb_cs_ctrl == 1 ) ) begin
+      bus_busy_cnt <= bus_busy_timer_len;
+      bus_busy_bit <= 1;
+    end
+  end
+
+  if ( bus_busy_timer_en == 0 ) begin
+    bus_busy_cnt <= 12'd0;
+    bus_busy_bit <= 0;
+  end
+end
 
 
 integer t;
@@ -399,7 +461,7 @@ always @ ( posedge clk_lb ) begin : proc_lb_wr
   el_fin_lb       <= el_fin_meta;
   el_fin_lb_p1    <= el_fin_lb;
 
-  if ( lb_wr == 1 && lb_cs_ctrl == 1 ) begin
+  if ( lb_wr_loc == 1 && lb_cs_ctrl == 1 ) begin
     ctrl_reg[5:0] <= lb_wr_d[5:0];
 
     // Any Control write other than "Sleep" will assert sump_is_awake
@@ -412,9 +474,14 @@ always @ ( posedge clk_lb ) begin : proc_lb_wr
   ctrl_cmd    <= ctrl_reg[5:0];
   ctrl_cmd_p1 <= ctrl_cmd[5:0];
 
-  if ( lb_wr == 1 && lb_cs_data == 1 ) begin
+  if ( lb_wr_loc == 1 && lb_cs_data == 1 ) begin
     case( ctrl_cmd[5:0] )
       6'h01 : ctrl_01_reg <= lb_wr_d[31:0];
+
+//    6'h1c : ctrl_2d_reg <= lb_wr_d[31:0]; // Thread Lock Set
+//    6'h1d : ctrl_2e_reg <= lb_wr_d[31:0]; // Thread Lock Clear
+//    6'h1e : ctrl_2f_reg <= lb_wr_d[31:0]; // Thread Pool Set
+//    6'h1f : ctrl_2f_reg <= lb_wr_d[31:0]; // Thread Pool Clear
 
       6'h20 : ctrl_20_reg <= lb_wr_d[31:0];
       6'h21 : ctrl_21_reg <= lb_wr_d[31:0];
@@ -432,22 +499,71 @@ always @ ( posedge clk_lb ) begin : proc_lb_wr
     endcase
   end
 
+  // Thread Lock and Pool Set and Clear Registers, 4 total
+  if ( lb_wr_loc == 1 && lb_cs_data == 1 && thread_lock_en == 1 ) begin
+    // Lock Set Request
+    if ( ctrl_cmd[5:0] == 6'h1c ) begin
+      // Never grant two locks. 
+      // A 2nd set request will be ignored and software will check for it
+      if ( thread_lock_reg == 32'h00000000 ) begin
+        thread_lock_reg <= thread_lock_reg[31:0] | lb_wr_d[31:0];// Write 1 to Set
+      end
+    end
+    // Lock Clear Request
+    if ( ctrl_cmd[5:0] == 6'h1d ) begin
+      thread_lock_reg <= thread_lock_reg[31:0] & ~ lb_wr_d[31:0];// Write 1 to Clear
+    end
+
+    // Pool Set Request
+    if ( ctrl_cmd[5:0] == 6'h1e ) begin
+        thread_pool_reg <= thread_pool_reg[31:0] | lb_wr_d[31:0];// Write 1 to Set
+        thread_pool_jk  <= 0;
+    end
+    // Pool Clear Request
+    if ( ctrl_cmd[5:0] == 6'h1f ) begin
+      thread_pool_reg <= thread_pool_reg[31:0] & ~ lb_wr_d[31:0];// Write 1 to Clear
+    end
+  end
+
+  if ( lb_rd_loc == 1 && lb_cs_data == 1 && thread_lock_en == 1 ) begin
+    // Optional Thread ID Pool. After this is read, it will switch to 0xFFFFFFFF
+    // indicating all thread IDs are taken. When the register is written to claim
+    // an ID, it will then report IDs that are actually taken.
+    // This is all about multiple software threads attempting to grab a pool ID
+    // at the same time.
+    if ( ctrl_cmd[5:0] == 6'h1e ) begin
+      thread_pool_jk <= 1;
+    end
+  end
+
+  // Single bit safely readable in Control that indicates a thread lock is set
+  if ( thread_lock_reg != 32'd0 ) begin
+    thread_lock_bit <= 1;
+  end else begin
+    thread_lock_bit <= 0;
+  end
+
 
   // armed_jk asserts entering the 0x01 Arm ctrl state
-  // it leaves on existing 0x01 ctrl state or el_fin assertin
-  if ( ctrl_cmd == 6'h01 && ctrl_cmd_p1 != 6'h01 ) begin
+  // it leaves on going to idle, init or reset states
+  if ( ctrl_cmd == 6'h01 ) begin
     armed_jk_lb <= 1;
     acquired_jk <= 0;
   end
-  if ( ctrl_cmd != 6'h01 && ctrl_cmd_p1 == 6'h01 ) begin
+  if ( ctrl_cmd == 6'h00 ||
+       ctrl_cmd == 6'h02 ||
+       ctrl_cmd == 6'h03 ||
+       ctrl_cmd == 6'h04    ) begin
     armed_jk_lb <= 0;
   end
-  if ( el_fin_lb == 1 && el_fin_lb_p1 == 0 ) begin
-// Removed 2023.06.27 as it was shutting down RLE too early.
-// Going forward only SW can take Sump3 out of Armed state
-//  armed_jk_lb <= 0;
-    acquired_jk <= 1;// Indicates RAM has valid data
-  end
+
+  //if ( ctrl_cmd == 6'h01 && ctrl_cmd_p1 != 6'h01 ) begin
+  //  armed_jk_lb <= 1;
+  //  acquired_jk <= 0;
+  //end
+  //if ( ctrl_cmd != 6'h01 && ctrl_cmd_p1 == 6'h01 ) begin
+  //  armed_jk_lb <= 0;
+  //end
 
   if ( ctrl_cmd == 6'h03 && ctrl_cmd_p1 != 6'h03 ) begin
     init_jk_lb <= 1;
@@ -456,14 +572,21 @@ always @ ( posedge clk_lb ) begin : proc_lb_wr
     init_jk_lb <= 0;
   end
 
-  if ( lb_wr == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h29 ) begin
+  if ( el_fin_lb == 1 && el_fin_lb_p1 == 0 ) begin
+// Removed 2023.06.27 as it was shutting down RLE too early.
+// Going forward only SW can take Sump3 out of Armed state
+//  armed_jk_lb <= 0;
+    acquired_jk <= 1;// Indicates RAM has valid data
+  end
+
+  if ( lb_wr_loc == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h29 ) begin
     b_addr  <= lb_wr_d[ana_ram_depth_bits-1:0];// Load user specified address
   end
   if ( rd_inc == 1 ) begin
     b_addr  <= b_addr[ana_ram_depth_bits-1:0] + 1;// Auto Increment on each read
   end
 
-  if ( lb_wr == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h29 ) begin
+  if ( lb_wr_loc == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h29 ) begin
 //  d_addr   <= lb_wr_d[dig_ram_depth_bits-1:0];// Load user specified address
     rom_addr <= lb_wr_d[19:0];
   end
@@ -494,6 +617,11 @@ end
   assign rec_cfg_select = ctrl_21_reg[31:0];
 
 
+// After the thread_lock_pool has been read, it reports all thread IDs are used until 
+// the register is written to XOR toggle a bit claiming the ID selected
+  assign thread_pool_readback = ( thread_pool_jk == 0 ) ? thread_pool_reg[31:0] : 32'hFFFFFFFF;
+
+
 //-----------------------------------------------------------------------------
 // RLE Controller serial bus is just a serialized version of the local bus.
 // Serial Local Bus Protocol. Variable 3,11 or 35 bits in length
@@ -511,16 +639,17 @@ always @ ( posedge clk_lb ) begin
   rle_hub_sr <= { rle_hub_sr[37:0], 1'b0 };
 
   if ( rle_hub_sr[38:0] == 39'd0 ) begin
-    if ( lb_rd    == 1 && lb_cs_ctrl    == 1 ) begin
-      rle_hub_sr <= { 4'd0, 3'b100, 32'd0 };
-    end
-    if ( lb_rd    == 1 && lb_cs_data    == 1 && hub_passthru == 0 ) begin
+// 2025.01.09 - Removed. Would mess with bus_busy_timer and isn't needed
+//  if ( lb_rd_loc == 1 && lb_cs_ctrl == 1 ) begin
+//    rle_hub_sr <= { 4'd0, 3'b100, 32'd0 };
+//  end
+    if ( lb_rd_loc == 1 && lb_cs_data == 1 && hub_passthru == 0 ) begin
       rle_hub_sr <= { 4'd0, 3'b101, 32'd0 };
     end
-    if ( lb_wr    == 1 && lb_cs_ctrl    == 1 ) begin
+    if ( lb_wr_loc == 1 && lb_cs_ctrl == 1 ) begin
       rle_hub_sr <= { 4'd0, 3'b110, lb_wr_d[7:0], 24'd0 };
     end
-    if ( lb_wr    == 1 && lb_cs_data    == 1 ) begin
+    if ( lb_wr_loc == 1 && lb_cs_data == 1 ) begin
       rle_hub_sr <= { 4'd0, 3'b111, lb_wr_d[31:0] };
     end
   end
@@ -569,9 +698,12 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
   cap_status_lb  <= cap_status[7:0];
   trigger_src_lb <= trigger_src[11:0];
 
-  if ( lb_rd == 1 && lb_cs_ctrl == 1 ) begin
-    lb_rd_d[5:0] <= ctrl_reg[5:0];
-    lb_rd_rdy    <= 1;
+  if ( lb_rd_loc == 1 && lb_cs_ctrl == 1 ) begin
+    lb_rd_d[31]    <= bus_busy_bit;   
+    lb_rd_d[30]    <= thread_lock_bit;
+    lb_rd_d[28:24] <= cap_status_lb[4:0];
+    lb_rd_d[5:0]   <= ctrl_reg[5:0];
+    lb_rd_rdy      <= 1;
   end else begin
     case( ctrl_cmd[5:0] )
       6'H00   : lb_rd_d  <= { 20'd0, pre_fill[3:0], cap_status_lb[7:0] };
@@ -590,6 +722,11 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       6'H13   : lb_rd_d  <= ctrl_13_status[31:0];
       6'H14   : lb_rd_d  <= ctrl_14_status[31:0];
       6'H15   : lb_rd_d  <= ctrl_15_status[31:0];
+
+      6'H1c   : lb_rd_d  <= thread_lock_reg[31:0];
+      6'H1d   : lb_rd_d  <= thread_lock_reg[31:0];
+      6'H1e   : lb_rd_d  <= thread_pool_readback[31:0];
+      6'H1f   : lb_rd_d  <= thread_pool_reg[31:0];
 
       6'H20   : lb_rd_d  <= ctrl_20_reg[31:0];
       6'H21   : lb_rd_d  <= ctrl_21_reg[31:0];
@@ -621,58 +758,68 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
       default : lb_rd_d  <= 32'd0;
     endcase
    case( ctrl_cmd[5:0] )
-      6'H00   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H01   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H02   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H03   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H00   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H01   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H02   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H03   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
 
-      6'H0b   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H0c   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H0d   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H0e   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H0f   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H10   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H11   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H12   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H13   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H14   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H15   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H0b   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H0c   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H0d   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H0e   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H0f   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H10   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H11   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H12   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H13   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H14   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H15   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
 
-      6'H20   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H21   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H22   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H23   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H24   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H25   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H26   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H27   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H28   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H29   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H2a   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H2b   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H30   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H31   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H32   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H33   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H34   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H35   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H36   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H37   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H38   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H39   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H3a   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H3c   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H3d   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H3e   : lb_rd_rdy <= lb_rd & lb_cs_data;
-      6'H3f   : lb_rd_rdy <= lb_rd & lb_cs_data;
+      6'H1c   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H1d   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H1e   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H1f   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+
+      6'H20   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H21   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H22   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H23   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H24   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H25   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H26   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H27   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H28   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H29   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H2a   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H2b   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H30   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H31   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H32   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H33   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H34   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H35   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H36   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H37   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H38   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H39   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H3a   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H3c   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H3d   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H3e   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
+      6'H3f   : lb_rd_rdy <= lb_rd_loc & lb_cs_data;
 
       default : lb_rd_rdy <= 0;
     endcase
   end
 
-  if ( lb_rd == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h0f ) begin
+  if ( lb_rd_loc == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h0f ) begin
     rd_inc     <= 1;// Auto Increment RAM Address
     dig_rd_inc <= 1;// Auto Increment RAM Address
+  end
+
+  if ( sump_en==0 && lb_rd_loc==1 && ( lb_cs_data==1 || lb_cs_ctrl==1 ) ) begin
+    lb_rd_d   <= 32'd0;
+    lb_rd_rdy <= 1;
   end
 end // proc_lb_rd
 
@@ -680,7 +827,9 @@ end // proc_lb_rd
   assign ctrl_0b_status[31:24] = sump_id;// Identification
   assign ctrl_0b_status[23:16] = sump_rev;// Revision
   assign ctrl_0b_status[15:8]  = rle_hub_num;
-  assign ctrl_0b_status[7:3]   = 0;
+  assign ctrl_0b_status[7:5]   = 0;
+  assign ctrl_0b_status[4]     = bus_busy_timer_en;
+  assign ctrl_0b_status[3]     = thread_lock_en;
   assign ctrl_0b_status[2]     = view_rom_en;
   assign ctrl_0b_status[1]     = ana_ls_enable;
   assign ctrl_0b_status[0]     = dig_hs_enable;

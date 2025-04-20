@@ -122,6 +122,46 @@
 # 2024.12.17 : Added screen_window_rle_time, time range at upper right corner. 
 # 2024.12.17 : Update cursor deltas so text and GUI delta always match. Don't bold triggerables
 # 2024.12.18 : Added y_scrolled_stats feature in upper-left corner when scrolling long signal list. 
+# 2025.01.08 : Thread Locking added
+# 2025.01.09 : cmd_sump_connect() Bug fix "for i in range(0,31):" to "(0,32)"
+# 2025.01.14 : Fixed ERROR-452 with digital_ls crashing when cursors applied.
+# 2025.01.15 : Deprecating old rd_status using sump_rd_status_legacy_en = 1.
+# 2025.01.16 : Save_Window, Save_Screen, Add_Measure, Remove_Meas added.    
+# 2025.01.17 : Numerous analog improvements. Too many to list here.
+# 2025.01.20 : Deselect after add_measurement().
+# 2025.01.21 : ToolTips in text. Deprecating scroll wheel analog scaling.
+# 2025.01.22 : Analog trigger improvements.
+# 2025.01.27 : proc_expand_group() fixed bug with rle_masked signals being invisible.
+# 2025.01.31 : sump_script_remote fixes
+# 2025.02.03 : screen_set_size() added and called when var screen_width / h changes.
+# 2025.02.09 : sump_remote_telnet added.
+# 2025.03.03 : cmd_load_uut() changes to support batch start script.
+# 2025.03.05 : cmd_sump_set_trigs() updated to support CLI by signal name.
+# 2025.03.05 : removed WASD keys as problematic with bd_shell.
+# 2025.03.07 : Cursor glitch fixes.
+# 2025.03.10 : trigger_index +/- 1 fix to update_cursors_to_mouse(), create_cursor_lines()
+#              to fix issue with cursor alignment to trigger with RLE vs LS (at 5ms)
+# 2025.03.11 : Sump Remote improvements.
+# 2025.03.17 : Fix text select bug when waveform font size is changed. mouse_get_text()
+#              switch from self.txt_height to self.txt_toolbar_height
+# 2025.03.18 : align analog_ls with digital_ls by pre-stuffing 2 Nones
+# 2025.03.18 : Fixed broken analog trigger in cmd_sump_set_trigs() due to break.
+# 2025.03.18 : mouse_get_text() deselect selected signals so K_UP/DOWN can adjust.
+# 2025.03.19 : disable cursors on screen resize as delta time was wrong.
+# 2025.03.20 : Text format fixes in display_text_stats()
+# 2025.03.20 : Added bd_shell support for UNIX history, !n, !! and "> foo.txt"
+# 2025.03.21 : Recursion added to signal copy,cut,delete, and paste.
+# 2025.03.24 : Fix binary groups not copy,cut,delete.
+# 2025.03.24 : Fixed diagnol drag bug of closing all but one window. Removed feature.
+# 2025.03.31 : close_window() added.  Added "sump_remote_file_en" and support CWD or UUT
+# 2025.04.03 : sump_remote bug with with rts of nested lists from source a file.
+# 2025.04.04 : Fixed analog vertical_offset==0 bug of scrolling with signal name.
+# 2025.04.08 : Fixed merge_view_rom_no_view_rom() bug not recognizing create_bit_group.
+# 2025.04.10 : Added viewable_value_list_too for rendering single ADC sample as line.
+# 2025.04.15 : Backed out 2025.03.18 : align analog_ls with digital_ls by pre-stuffing 2 Nones
+#              On zoom_full, trigger location was off by 2 samples in any analog_ls window.
+# 2025.04.15 : Added sump_ls_ana_dig_alignment feature. Default to 4.
+# 2025.04.17 : Fixed cmd_save_pza() bug not saving to sump_pza directory when fn specified.
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -239,8 +279,8 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2024.12.18";
-    self.copyright = "(C)2024 BlackMesaLabs";
+    self.vers = "2025.04.17";
+    self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
     self.pygame = pygame;
@@ -256,6 +296,21 @@ class main:
     self.file_log = open ( filename, 'w' );
     log(self,["Welcome to "+self.name+" "+self.vers+" "+self.copyright]);
     log(self,["Licensed under GNU General Public License v3.0"]);
+
+    if int( self.vars["sump_remote_telnet_en"], 10 ) == 1:
+      PORT = int( self.vars["sump_remote_telnet_port"], 10 );
+      HOST =      self.vars["sump_remote_telnet_host"];
+      if HOST == "*.*.*.*":
+        HOST = "";# Accept anybody
+      log(self,["Starting sump_remote Telnet server on TCP port %d" % PORT]);
+      import socket;
+      self.telnet_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#     self.telnet_socket.setblocking(False);
+      self.telnet_socket.bind((HOST, PORT));
+      self.telnet_socket.listen(4);
+#     self.telnet_clients = []; #list of clients connected
+    else:
+      self.telnet_socket = None;
 
 #   x = 10; y = 10
 #   txt = os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (x,y)
@@ -340,6 +395,7 @@ class main:
  
   def process_events(self):
     for event in pygame.event.get():
+#     button1_handled = False;
 #     print( dir( event ) );
 #     print( event.type );
       if event.type == pygame.QUIT:
@@ -366,27 +422,58 @@ class main:
 
       # VIDEORESIZE
       if event.type == pygame.VIDEORESIZE:
-        self.refresh_waveforms = True;
         self.screen= pygame.display.set_mode(event.dict['size'], pygame.RESIZABLE );
-        if True:
-          ( self.screen_width, self.screen_height ) = self.screen.get_size();
-          if self.screen_width < 800 or self.screen_height < 600:
-            self.screen_width = 800;
-            self.screen_height = 600;
-            self.screen = pygame.display.set_mode( (self.screen_width,self.screen_height), 
-              pygame.RESIZABLE );
-          self.options.resolution = ( self.screen_width, self.screen_height );
-          self.ui_manager.set_window_resolution(self.options.resolution)
-          screen_erase(self);
-          resize_containers(self);
+        screen_get_size(self);
+        screen_set_size(self);
 
-          # Since cursors are mouse positioned, they may go off-screen on a resize
-          # To prevent this, on any resize, place them back on the left.
-          self.cursor_list[0].x = 20;
-          self.cursor_list[1].x = 40;
+        # Turn off cursors on a resize as the delta measurement was wrong after resize
+        self.cursor_list[0].visible = False;
+        self.cursor_list[1].visible = False;
+        update_toggle_buttons(self);
 
-          self.vars["screen_width"]  = str( self.screen_width );
-          self.vars["screen_height"] = str( self.screen_height );
+#       if True:
+#       ( self.screen_width, self.screen_height ) = self.screen.get_size();
+#       display_text_stats( self );
+#       print(1);
+#       create_cursor_lines(self); # Generate cursors
+#       print(2);
+#       draw_surfaces(self);
+#       print(3);
+#       print( self.cursor_list[0].delta_txt );
+#       self.cursor_list[0].delta_txt = None;
+#       self.refresh_waveforms = True;
+#       self.refresh_window_list = [0,1,2];
+#       self.refresh_cursors   = True;
+
+
+#       update_cursors_to_window( self );
+#       update_cursors_to_mouse(self);
+
+#       self.refresh_waveforms = True;
+#       self.refresh_cursors = True;
+
+#       self.refresh_waveforms = True;
+#       self.screen= pygame.display.set_mode(event.dict['size'], pygame.RESIZABLE );
+#       if True:
+#         ( self.screen_width, self.screen_height ) = self.screen.get_size();
+#         # Make Widescreen 16:9 SD the minimum allowed
+#         if self.screen_width < 720 or self.screen_height < 576:
+#           self.screen_width = 720;
+#           self.screen_height = 576;
+#           self.screen = pygame.display.set_mode( (self.screen_width,self.screen_height), 
+#             pygame.RESIZABLE );
+#         self.options.resolution = ( self.screen_width, self.screen_height );
+#         self.ui_manager.set_window_resolution(self.options.resolution)
+#         screen_erase(self);
+#         resize_containers(self);
+#
+#         # Since cursors are mouse positioned, they may go off-screen on a resize
+#         # To prevent this, on any resize, place them back on the left.
+#         self.cursor_list[0].x = 20;
+#         self.cursor_list[1].x = 40;
+#
+#         self.vars["screen_width"]  = str( self.screen_width );
+#         self.vars["screen_height"] = str( self.screen_height );
 
       # MOUSEMOTION
       self.mouse_motion_prev = self.mouse_motion;
@@ -402,16 +489,67 @@ class main:
           self.refresh_cursors   = True;
 
       # MOUSEBUTTONDOWN
+# HERE53
       if event.type == pygame.MOUSEBUTTONDOWN:
+#       button1_handled = False;
+#       new_window_selected = False;
+
         if event.button == 1 : 
+          # Note: when file_dialog is open, click to closing would select the window
+          # underneath, so check for it and ignore.
+          (wave_i, zone_i ) = mouse_get_zone( self );
+#         if self.file_dialog == None:
+#         print( wave_i , self.window_selected );
+#         if wave_i != None and self.window_selected != None and self.file_dialog == None:
+          if wave_i != None and                                  self.file_dialog == None:
+            # There are delta issues when switching windows with different time_zones
+            # Hack fix is to deselect cursors.
+            if self.window_selected != None:
+              if self.window_list[self.window_selected].timezone != self.window_list[wave_i].timezone:
+                self.cursor_list[0].visible = False;
+                self.cursor_list[1].visible = False;
+                update_toggle_buttons(self);
+
+            if wave_i != self.window_selected:
+              select_window( self, wave_i );
+            else:
+              mouse_event_single_click_waveform( self );
+          
+#         if wave_i != None and wave_i != self.window_selected and self.file_dialog == None:
+#         if wave_i != None and self.window_selected != None and self.file_dialog == None:
+
+#       if event.button == 1 : 
+#         self.mouse_btn1_dn = pygame.mouse.get_pos();# (x,y)
+#         # Note: when file_dialog is open, click to closing would select the window
+#         # underneath, so check for it and ignore.
+#         (wave_i, zone_i ) = mouse_get_zone( self );
+#         if wave_i != None and self.file_dialog == None:
+#           window_selected_old = self.window_selected;
+#           if wave_i != window_selected_old:
+#             select_window( self, wave_i );
+#           # If the button press resulted in a window switch, don't allow the press to
+#           # reposition the cursor in the new window.
+#           if window_selected_old != self.window_selected:
+#             button1_handled = True;
+#             new_window_selected = True;
+
+#       if event.button == 1 and button1_handled == False : 
+        if event.button == 1 :
           self.mouse_btn1_dn = pygame.mouse.get_pos();# (x,y)
-          rts = mouse_get_cursor(self);# Grab any cursor near the mouse pointer
-          if not rts:
-            mouse_get_text(self);# Select any adjustable text fields at mouse
-            rts = mouse_event_single_click(self);# Select any signal name at mouse
-            if rts:
-              ( self.mouse_signal_drag_from_window, null ) = mouse_get_zone( self );
-              self.refresh_waveforms = True;
+#         (wave_i, zone_i ) = mouse_get_zone( self );
+#         if wave_i != None and wave_i == self.window_selected:
+          if True:
+            rts = mouse_get_cursor(self);# Grab any cursor near the mouse pointer
+            if not rts:
+              mouse_get_text(self);# Select any adjustable text fields at mouse
+              rts = mouse_event_single_click(self);# Select any signal name at mouse
+              if rts:
+                ( self.mouse_signal_drag_from_window, null ) = mouse_get_zone( self );
+                self.refresh_waveforms = True;
+#         mouse_event_single_click_waveform( self );
+#         update_cursors_to_mouse(self);
+#         self.refresh_cursors = True;
+
         elif event.button == 2 : 
 #         print("Button2");
           self.mouse_btn2_dn  = pygame.mouse.get_pos();# (x,y)
@@ -438,7 +576,7 @@ class main:
               a = self.mouse_signal_drag_from_window + 1;
               b = self.mouse_signal_drag_to_window + 1;
               if a != b:
-                print("Signal DRAG from Window-%d to Window-%d" % ( a,b ) );
+#               print("Signal DRAG from Window-%d to Window-%d" % ( a,b ) );
                 cmd_copy_signal( self, [ None,None,None] );
                 select_window( self, self.mouse_signal_drag_to_window );
                 cmd_paste_signal( self, [ None,None,None] );
@@ -447,9 +585,11 @@ class main:
             if self.mouse_signal_drag_to_window != None:
               mouse_delta = ( abs(self.mouse_btn1_dn[0]-self.mouse_btn1_up[0]),
                               abs(self.mouse_btn1_dn[1]-self.mouse_btn1_up[1])  );
-              if ( mouse_delta[0] < 5 and mouse_delta[1] < 5 ):
-                mouse_event_single_click_waveform( self );
-                self.refresh_cursors = True;
+#             if ( mouse_delta[0] < 5 and mouse_delta[1] < 5 ):
+#               (wave_i, zone_i ) = mouse_get_zone( self );
+#               if wave_i != None and wave_i == self.window_selected:
+#                 mouse_event_single_click_waveform( self );
+#                 self.refresh_cursors = True;
 #               print("Mouse!");
  
 
@@ -518,7 +658,7 @@ class main:
                         dropped = True; 
                         self.signal_list.insert( j, self.signal_list.pop( i ) );
                 self.refresh_waveforms = True;
-                print("What a Drag!");
+#               print("What a Drag!");
           self.mouse_btn1_select = False;
 
         # Center mouse button is a "Pinch" like Zoom To Cursors but without cursors
@@ -591,22 +731,28 @@ class main:
                 proc_cmd( self, "zoom_in" );
               else:
                 proc_cmd( self, "zoom_out" );
-            # Diagonal will rotate through windows
-            if ( dy > 50 and dx > 50 and d_x_over_y < 3 and d_x_over_y > 0.5 ):
-              if y2 > y1:
-                proc_cmd( self, "win_pagedown" );
-              else:
-                proc_cmd( self, "win_pageup" );
-              self.vars["screen_windows"] = "%01x" % self.screen_windows;
-              screen_erase(self);
-              resize_containers(self);
-              rts = True;# Force a refresh
+
+# This was buggy
+#           # Diagonal will rotate through windows
+#           if ( dy > 50 and dx > 50 and d_x_over_y < 3 and d_x_over_y > 0.5 ):
+#             if y2 > y1:
+#               proc_cmd( self, "win_pagedown" );
+#             else:
+#               proc_cmd( self, "win_pageup" );
+#             self.vars["screen_windows"] = "%01x" % self.screen_windows;
+#             screen_erase(self);
+#             resize_containers(self);
+#             rts = True;# Force a refresh
 
         if self.select_text_i != None:
+          rate = 8;
+          if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
+               self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
+            rate = 1;
           if ( event.button == 4 ):
-            proc_acq_adj_inc( self );
+            proc_acq_adj_inc( self, rate );
           if ( event.button == 5 ):
-            proc_acq_adj_dec( self );
+            proc_acq_adj_dec( self, rate );
 
         # 4==ScrollUp 5==ScrollDown
         # My LogitechMX mouse with momentum wheel can randomly scroll once when just
@@ -644,6 +790,9 @@ class main:
               if each_signal.selected and each_signal.type == "analog":
                 no_analog_signals_selected = False;
 
+            if int(self.vars["scroll_wheel_analog_en"],10) == 0:
+              no_analog_signals_selected = True;
+
 #           if no_signals_selected:
 #           if no_signals_selected and self.select_text_i == None:
 #           if no_analog_signals_selected and self.select_text_i == None:
@@ -677,11 +826,15 @@ class main:
               elif ( button_press == 5 and zone_i == 1 ):
                 proc_cmd( self, "scroll_down" );
 
-              elif ( button_press == 4 and zone_i == 4 ):
-                proc_cmd( self, "scroll_up" );
-              elif ( button_press == 5 and zone_i == 4 ):
-                proc_cmd( self, "scroll_down" );
+#             elif ( button_press == 4 and zone_i == 4 ):
+#               proc_cmd( self, "scroll_up" );
+#             elif ( button_press == 5 and zone_i == 4 ):
+#               proc_cmd( self, "scroll_down" );
 
+              elif ( button_press == 4 and zone_i == 4 ):
+                proc_cmd( self, "scroll_analog_up" );
+              elif ( button_press == 5 and zone_i == 4 ):
+                proc_cmd( self, "scroll_analog_down" );
 
             
             # Change the vertical scale on the selected analog waveform signal(s) 
@@ -719,16 +872,45 @@ class main:
         if ( self.has_focus and (  event.button == 4 or event.button == 5 ) ):
           self.last_scroll_wheel_tick = tick_time;
 
-        # 1==LeftButton detect if a waveform window has been selected. Highlight the border
+# HERE54
+#       # 1==LeftButton detect if a waveform window has been selected. Highlight the border
         if event.button == 1 :
-          mouse_release_cursor( self );
-          (wave_i, zone_i ) = mouse_get_zone( self );
+          mouse_release_cursor( self );# Release any cursor being dragged
+ 
+#         # Note: when file_dialog is open, click to closing would select the window
+#         # underneath, so check for it and ignore.
+#         (wave_i, zone_i ) = mouse_get_zone( self );
+#         if wave_i != None and self.file_dialog == None:
+#           # There are delta issues when switching windows with different time_zones
+#           # Hack fix is to deselect cursors.
+#           if self.window_list[self.window_selected].timezone != self.window_list[wave_i].timezone:
+#             self.cursor_list[0].visible = False;
+#             self.cursor_list[1].visible = False;
+#             update_toggle_buttons(self);
+#           if wave_i != self.window_selected:
+#             select_window( self, wave_i );
 
-          # Note: when file_dialog is open, click to closing would select the window
-          # underneath, so check for it and ignore.
-          if wave_i != None and self.file_dialog == None:
-            select_window( self, wave_i );
+#           if wave_i != self.window_selected:
+#             self.cursor_list = [];
+#             self.cursor_list[0].delta_txt = None;
+#             for each_cursor in self.cursor_list:
+#               each_cursor.delta_txt = None;
+#               each_cursor.trig_delta_t = None;
+#               each_cursor.trig_delta_unit = None;
+#             select_window( self, wave_i );
 
+#           update_cursors_to_window(self);# cursor sample time unit may change
+#           display_text_stats( self );# 2025.07.03 update self.cursor_list[0].delta_txt
+#           self.refresh_waveforms = True;
+#           print("self.window_selected is %d" % self.window_selected);
+#           print( self.cursor_list[0].delta_txt );
+#           self.refresh_window_list += [ wave_i ];
+
+#   wave_i = self.window_selected;
+#   timezone = self.window_list[wave_i].timezone;
+#   for (i,each_win) in enumerate( self.window_list ):
+#     if (timezone == each_win.timezone ):
+#       if i not in self.refresh_window_list:
 
 #           if ( self.window_list[wave_i].panel.visible == True ):
 #             if self.window_list[wave_i].panel.border_colour != self.color_white:
@@ -989,8 +1171,14 @@ class main:
       self.ui_manager.update( time_delta = 0 );
       if self.mode_acquire and self.sump_connected:
         spinner = rotate_spinner( spinner );
-        self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Waiting for trigger " + spinner);
+        self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" HW Status: Waiting for trigger " + spinner);
+
+#       cmd_thread_lock(self);
+#       self.sump.rd_status();
+#       cmd_thread_unlock(self);
+
         self.sump.rd_status();
+
         ( stat_str, status ) = self.sump.status;
         log( self, ["mode_acquire status is %s" % stat_str ] );
         if stat_str == "acquired":
@@ -1051,11 +1239,125 @@ class main:
       pygame.display.update();# Now off to the GPU
 
       if not self.has_focus:
-        pygame.time.wait(250);# time in mS. GUI is out of focus
-        file_name = self.vars["sump_script_remote"];
-        if os.path.exists( file_name ):
-          proc_cmd( self, "source %s" % file_name );
-          os.remove( file_name );
+        if self.telnet_socket != None:
+          import select;
+          import socket;
+          prompt = "bd_shell>";
+          read_list = [ self.telnet_socket ];
+          connected_jk = True;
+          client_socket = None;
+          while ( connected_jk ):
+            timeout = 0;# Poll
+            readable, writable, errored = select.select(read_list, [], [], timeout);
+            for s in readable:
+              if s is self.telnet_socket:
+                client_socket, address = self.telnet_socket.accept();
+#               client_socket.setblocking(False);
+                read_list.append(client_socket);
+#               print(("Connection established from", address));
+                log( self, [ ("Connection established from", address) ] );
+                client_socket.send((prompt).encode("utf-8"));# Conv Byte Array to String
+                self.sump_remote_in_use = True;
+                txt = "";
+              else:
+                data = client_socket.recv(1024)
+                if data:
+                  try:
+                    txt += data.decode("utf-8");
+                  except:
+                    txt += "";
+                  if "\n" in txt:
+#                   print( txt );
+                    if "quit" not in txt and "exit" not in txt:
+                      rts = proc_cmd( self, txt.rstrip() );
+#                     client_socket.send(("\r\n").encode("utf-8"));# Conv Byte Array to String
+                      if rts != None:
+                        for each_rts in rts:
+                          client_socket.send((each_rts+"\r\n").encode("utf-8"));# Conv Byte Array to String
+                      txt = "";
+                      client_socket.send((prompt).encode("utf-8"));# Conv Byte Array to String
+                    else:
+                      client_socket.close();
+                      client_socket = None;
+                      self.telnet_socket.close();
+                      # This is a hack. Once a client session has closed it is done for, so start it up again.
+#                     self.telnet_socket.detach();
+                      self.telnet_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#                     self.telnet_socket.setblocking(False);
+                      HOST =      self.vars["sump_remote_telnet_host"];
+                      if HOST == "*.*.*.*":
+                        HOST = "";# Accept anybody
+                      PORT = int( self.vars["sump_remote_telnet_port"], 10 );
+                      self.telnet_socket.bind((HOST, PORT));
+                      self.telnet_socket.listen(4);
+                      connected_jk = False;
+                else:
+#                 print(("Connection closed from", address));
+                  log( self, [ ("Connection closed from", address) ] );
+                  connected_jk = False;
+            if len(readable) == 0 and client_socket == None:
+              connected_jk = False;
+                
+
+        # Don't spin up a CPU when the GUI is out of focus. 
+        # Exception is when sump_remote is in use.
+        if self.sump_remote_in_use:
+          pygame.time.wait(10);# time in mS. GUI is out of focus
+        else:
+          pygame.time.wait(250);# time in mS. GUI is out of focus
+
+#       if os.path.exists( file_name ):
+#         proc_cmd( self, "source %s" % file_name );
+#         os.remove( file_name );
+
+        if int( self.vars["sump_remote_file_en"], 10 ) == 1:
+          file_name = self.vars["sump_script_remote"];
+          # UUT Path is the default path if it exists, otherwise use the CWD
+          paths = [];
+          if self.path_to_uut != None:
+            paths += [ self.path_to_uut ];
+#         else:
+#           paths += [ os.getcwd() ];
+          paths += [ os.getcwd() ];
+
+          # Look for the file specified in the usual places.
+          for each_path in paths:
+            file_path_name = os.path.join( each_path, file_name );
+            if ( os.path.exists( file_path_name )):
+              self.sump_remote_in_use = True;
+              cmd_list = file2list( file_path_name );
+              rts = [];
+              dbg_rts = [];
+              for each_cmd in cmd_list:
+#               print( each_cmd );
+                log( self, [ each_cmd ] );
+                results = proc_cmd( self, each_cmd );
+                # Flatten potential nested list from sourcing a file
+                for each_i in results:
+                  if type( each_i ) == str:
+                    rts += [ each_i ];
+                  else:
+                    for each_j in each_i:
+                      rts += [ each_j ];
+#               rts += results;
+#               dbg_rts += [ ( each_cmd, results ) ];
+#               rts += proc_cmd( self, each_cmd );
+#             for each in rts:
+#               print( str( type(rts) ) + " " + str(rts ) );
+#             for each in dbg_rts:
+#               print( each );
+
+              file_out_path_name = os.path.join( each_path, "sump_remote_results.txt" );
+              list2file( file_out_path_name, rts );
+              pid = os.getpid();
+              file_tmp_name = file_path_name + "." + str(pid); 
+              try:
+                if ( os.path.exists( file_tmp_name )):
+                  os.remove( file_tmp_name );
+                os.rename( file_path_name, file_tmp_name );# Tells host okay to send next command
+                os.remove( file_tmp_name );
+              except:
+                log( self, ["ERROR mv+rm on %s %s" % ( file_path_name, file_tmp_name ) ] );
 
       if self.mode_acquire:
         pygame.time.wait(750);# Limit the polling rate
@@ -1086,7 +1388,7 @@ def auto_select_window( self ):
 #   select_window( self, i );
 #   self.window_selected = i;
 #   select_window( self, 0 );# Default to 1st window
-  print("self.window_selected is now %s" % self.window_selected );
+# print("self.window_selected is now %s" % self.window_selected );
   return;
 
 def select_window( self, wave_i ):
@@ -1102,7 +1404,6 @@ def select_window( self, wave_i ):
         self.window_list[wave_i].panel.border_width  = 2;
         self.window_list[wave_i].panel.shadow_width = 0;
         self.window_list[wave_i].panel.rebuild();
-        print( self.window_list[wave_i].panel.shadow_width );
 
         clr = self.container_list[0].border_colour;# Get default border color
         for (i,each) in enumerate( self.window_list ):
@@ -1125,6 +1426,26 @@ def select_window( self, wave_i ):
 # update_cursors_to_window(self);# cursor sample time unit may change
   return;
 
+
+def close_window( self, wave_i ):
+  if wave_i != None: 
+    if ( self.window_list[wave_i].panel.visible == True ):
+      self.window_list[wave_i].panel.visible = False;   
+      resize_containers(self);# Resize based on screen dimensions
+      update_toggle_buttons( self );
+  return;
+
+def close_bd_shell( self ):
+  self.cmd_console.visible = False;
+  resize_containers(self);# Resize based on screen dimensions
+  update_toggle_buttons( self );
+  return;
+
+def open_bd_shell( self ):
+  self.cmd_console.visible = True;
+  resize_containers(self);# Resize based on screen dimensions
+  update_toggle_buttons( self );
+  return;
 
 ###############################################################################
 # The toggle buttons aren't real toggle buttons. I just make them look that way
@@ -1156,12 +1477,19 @@ def update_toggle_buttons( self ):
 # What is diplayed changed based on the screen mode of Display,Acquisition,Views
 # WARNING: This gets called every PyGame tick
 def display_text_stats( self ):
+  # Wait 100ms instead of recalculating everything every pygame tick
+  if self.pygame.time.get_ticks() - self.text_stats_tick_time < 100:
+    return;
+  else:
+    self.text_stats_tick_time = self.pygame.time.get_ticks();
+
   self.select_text_rect = ( 0,0,0,0 );
   bold_i = self.select_text_i;
   l_time = None;
 
   x1 = None;
   y1 = None;
+  extra_txt_list = [];
 
   # Views Panel is open
   if self.container_view_list[0].visible == True :
@@ -1217,14 +1545,15 @@ def display_text_stats( self ):
               for each_line in file_list:
                 words = " ".join(each_line.split()).split(' ') + [None] * 4;
                 if words[0] != None:
-                  if words[0] == "create_signal":
+#                 if words[0] == "create_signal":
+                  if words[0] == "create_signal" or words[0] == "create_bit_group":
                     if words[1] != None:
                       rts += ["  " + words[1] ];
             except:
               rts += [" Failed to open %s" % (each_view.filename) ];
             
               
-    self.text_stats = ( rts, (x1,y1), bold_i );
+    self.text_stats = ( rts, extra_txt_list, (x1,y1), bold_i );
 
   # Display Panel is open. For the selected window, display info about it and 
   # cursors. If any signals are selected, display info about them as well but don't
@@ -1244,10 +1573,11 @@ def display_text_stats( self ):
     else:
       line2 = "";
 
-    if any( each.selected for each in self.signal_list ):
-      short_text = True;
-    else:
-      short_text = False;
+#   if any( each.selected for each in self.signal_list ):
+#     short_text = True;
+#   else:
+#     short_text = False;
+    short_text = False;
 
     rts = [];
     min_time = 0; max_time = 0;
@@ -1270,6 +1600,34 @@ def display_text_stats( self ):
     (a,b) = time_rounder( min_time, "ps" );
     (c,d) = time_rounder( max_time, "ps" );
     if not short_text:
+      wheel_txt = "";
+      (wave_i, zone_i ) = mouse_get_zone( self );
+
+      if wave_i != None: 
+        if self.window_list[ wave_i ].grid_enable:
+          if   zone_i == 1:
+            wheel_txt = "Signal Scroll";
+          elif zone_i == 2:
+            wheel_txt = "H-Scale";
+          elif zone_i == 3:
+            wheel_txt = "H-Position";
+          elif zone_i == 4:
+            wheel_txt = "V-Position";
+        else:
+          if   zone_i == 1:
+            wheel_txt = "Signal Scroll";
+          elif zone_i == 2:
+            wheel_txt = "Zoom";
+          elif zone_i == 3:
+            wheel_txt = "Pan";
+          elif zone_i == 4:
+            wheel_txt = "";
+
+      if wave_i != self.window_selected and wave_i != None:
+        rts += ["--Window Not Selected--"];
+      else:
+        rts += ["MouseWheel: %s" % wheel_txt ];
+
       rts += ["Time: %d%s to +%d%s" % (a,b,c,d) ];
 #     rts += ["View: %d%s to +%d%s" % (a,b,c,d) ];
 
@@ -1376,7 +1734,7 @@ def display_text_stats( self ):
 #     rts += [ ""];
 #     rts += [ "Window   = %s" % my_win.name ];
 #     rts += [ "timezone = %s" % my_win.timezone ];
-      rts += [ "Window: %s,%s" % ( my_win.name, my_win.timezone ) ];
+#     rts += [ "Window: %s,%s" % ( my_win.name, my_win.timezone ) ];
 
       if ( my_win.sample_period != None and
            my_win.sample_unit   != None and
@@ -1388,10 +1746,19 @@ def display_text_stats( self ):
         (c,d) = time_rounder( visible_width, my_win.sample_unit );
 #       rts += [ "capture width = %d %s" % (a,b) ];
 #       rts += [ "visible width = %d %s" % (c,d) ];
-        rts += [ "Visible: %d%s of %d%s" % (c,d,a,b) ];
 
+# New 2025.01.17
         if my_win.grid_enable:
-          rts += [ "%d %s per division" % ( round((a/10.0),3),b ) ];
+          rts += [ "Window-%s %.1f%s/div" % ( my_win.name, (round((c/1.0),3)/10.0),d ) ];
+        else:
+          rts += [ "Window-%s" % ( my_win.name                  ) ];
+        rts += [ " Visible: %d%s of %d%s" % (c,d,a,b) ];
+
+#       if my_win.grid_enable:
+#         rts += [ "%d %s per division" % ( round((c/10.0),3),d ) ];
+
+#       if my_win.grid_enable:
+#         rts += [ "%d %s per division" % ( round((a/10.0),3),b ) ];
 
 #     else:
 #       print(my_win.sample_period, my_win.sample_unit, my_win.samples_total, my_win.samples_shown );
@@ -1407,7 +1774,6 @@ def display_text_stats( self ):
     if self.window_selected != None :
       # List all the cursors
       if trigger_index != None and x_space != 0:
-
         txt = "";
         self.cursor_list[0].delta_txt = None;
         if self.cursor_list[0].visible and sample_unit != None and sample_period != None:
@@ -1423,8 +1789,8 @@ def display_text_stats( self ):
             (a,b) = time_rounder( c12_t_delta, sample_unit );
             txt = "%0.1f%s" % ( a,b);
             self.cursor_list[0].delta_txt = txt;
-#           rts += [indent+delta+" = " + txt];
             txt  = indent+delta+txt;
+#           print("sample_period is %d : sample_unit is %s" % ( sample_period, sample_unit ) );
 
         if self.cursor_list[0].visible or self.cursor_list[1].visible:
           rts += ["Cursors:" + txt];
@@ -1454,55 +1820,194 @@ def display_text_stats( self ):
 #             v_delta = abs( analog_value_list[0] - analog_value_list[1] );
 #             rts += [indent+delta+"A = %0.1f %s" % ( v_delta, each_sig.units )];
 
-    if self.window_selected != None :
-      # Display info about selected visible signals in the selected window 
-      for each_sig in self.signal_list:
-        if each_sig.selected and each_sig.visible and each_sig.parent == my_win and each_sig.type != "group" :
-          rts += ["%s:" % ( each_sig.name)];
-          if each_sig.units_per_division != None and each_sig.units != None:
-            # Round the decimal to one digit and add command separators for thousands
-            units_per_division = round( each_sig.units_per_division,3 );
-            rts += [" "+comma_separated(units_per_division) + " " + each_sig.units + " per div" ];
+    # Display Measurements then Selected signals
+    tall_measurements = int( self.vars["screen_measurements_tall"],10 );
+    for j in range(0,2):
+      if self.window_selected != None :
+        # Display info about selected visible signals in the selected window 
+        display_measurements = False;
+        if ( j == 0 ):
+          for each_sig in self.signal_list:
+            if ( each_sig in self.measurement_list ) and \
+                 each_sig.visible and each_sig.parent == my_win and each_sig.type != "group":
+              display_measurements = True;
+          if display_measurements:
+            rts += ["Measurements:"];
+        else:
+          for each_sig in self.signal_list:
+            if ( each_sig.selected ) and \
+                 each_sig.visible and each_sig.parent == my_win and each_sig.type != "group":
+              display_measurements = True;
+          if display_measurements:
+            rts += ["Selected:"];
 
-#           if each_sig.trigger:
-#             rts += [" Trigger Assigned"];
-#           elif each_sig.triggerable:
-#             rts += [" Trigger Capable"];
+        for each_sig in self.signal_list:
+          if ( each_sig.selected or each_sig in self.measurement_list ) and \
+               each_sig.visible and each_sig.parent == my_win and each_sig.type != "group":
+            sig_name = ""; delta_txt=""; upd_txt=""; min_max_txt=""; range_txt=""; vo_txt="";
+            sig_name = each_sig.name;
+            if len(sig_name) > 16:
+              sig_name = sig_name[0:14] + "..";
+            sig_name = " %s:" % sig_name;
 
-          # Display the values for the selected signals at each cursor
-          analog_value_list = [];
-          for (i,each_cur) in enumerate( self.cursor_list ):  
-            if each_cur.visible and x_space != 0:
-              sample_index = samples_start_offset + int( float(each_cur.x) / x_space );
-              if sample_index < len( each_sig.values ) and sample_index > 0:
-                val_raw = each_sig.values[sample_index];
-                if val_raw != None:
-                  val_raw *= each_sig.units_per_code;
-                  val_raw += each_sig.offset_units;
-                  analog_value_list += [ val_raw ];
-                  if each_sig.format == "analog":
+#           print("each_sig.type is %s " % each_sig.type );
+            rts_sig = [];
+            if each_sig.type == "analog":
+
+              if each_sig.selected and each_sig.units_per_division != None and each_sig.units != None:
+                # Round the decimal to one digit and add command separators for thousands
+                units_per_division = round( each_sig.units_per_division,3 );
+                if j == 1:
+                  upd_txt = " "+comma_separated(units_per_division) + each_sig.units + " per div";
+
+              if each_sig.selected and j == 1:
+                vo_txt = " "+ "%0.2f Vertical Offset" % each_sig.vertical_offset;
+
+              if each_sig.selected and each_sig.units_per_division != None and \
+                 each_sig.units != None and len( each_sig.values ) != 0:
+                signal_val_list = [];
+                # TODO: This should be a list comprehension
+                for val_raw in each_sig.values: 
+                  if val_raw != None:
+                    val_raw *= each_sig.units_per_code;
+                    val_raw += each_sig.offset_units;
                     val_raw = round( val_raw, 3 );
-                    val_str = comma_separated(val_raw); # Comma thousand separator
+                    signal_val_list += [ val_raw ];
+                # ADC samples may be None, which results in zero length min/max
+                if len( signal_val_list ) != 0:
+                  val_min = three_decimal_places( min( signal_val_list ) );
+                  val_max = three_decimal_places( max( signal_val_list ) );
+                  val_min_str = comma_separated(val_min); # Comma thousand separator
+                  val_max_str = comma_separated(val_max); # Comma thousand separator
+                  val_min_str += each_sig.units;
+                  val_max_str += each_sig.units;
+                  min_max_txt = " "+"Min/Max "+val_min_str+"/"+val_max_str;
 
-                  elif each_sig.format == "hex":
-                    val_str = "%08x" % int(val_raw);
-                    val_str = val_str[-each_sig.nibble_cnt:]+" ";
+                  range_min = three_decimal_places( each_sig.offset_units );
+                  range_max = three_decimal_places( each_sig.offset_units + ( each_sig.range * each_sig.units_per_code ));
+                  range_min_str = comma_separated(range_min); # Comma thousand separator
+                  range_max_str = comma_separated(range_max); # Comma thousand separator
+                  range_min_str += each_sig.units;
+                  range_max_str += each_sig.units;
+                  range_txt = " "+"Range "+range_min_str+"/"+range_max_str;
+  #                 print( range_txt );
+
+              # Display the values for the selected signals at each cursor
+              analog_value_list = [];
+              c_txt_list = ["",""];
+              for (i,each_cur) in enumerate( self.cursor_list ):  
+                if each_cur.visible and x_space != 0:
+                  sample_index = samples_start_offset + int( float(each_cur.x) / x_space );
+                  if sample_index < len( each_sig.values ) and sample_index > 0:
+                    val_raw = each_sig.values[sample_index];
+                    if val_raw != None:
+                      val_raw *= each_sig.units_per_code;
+                      val_raw += each_sig.offset_units;
+                      analog_value_list += [ val_raw ];
+                      if each_sig.format == "analog":
+                        val_raw = round( val_raw, 3 );
+                        val_str = comma_separated(val_raw); # Comma thousand separator
+
+                      elif each_sig.format == "hex":
+                        val_str = "%08x" % int(val_raw);
+                        val_str = val_str[-each_sig.nibble_cnt:]+" ";
+                      else:
+                        val_str = "%d " % int(val_raw);
+
+                      if each_sig.units != None:
+                        val_str += " " + each_sig.units;
+                      c_txt_list[i] = indent+" C%d: %s" % ( (i+1), val_str );
+
+              # Measure the amplitude delta between the two cursors on selected signal
+              if ( each_sig.format == "analog" and len( analog_value_list ) == 2 ):
+                if self.cursor_list[0].visible and self.cursor_list[1].visible:
+                  v_delta = abs( analog_value_list[0] - analog_value_list[1] );
+                  delta_txt = indent+" "+delta+" = %0.3f %s" % ( v_delta, each_sig.units );
+
+              delta_txt = delta_txt.replace(" ","");
+              delta_txt = delta_txt.replace("=","");
+
+              if len( self.measurement_list ) >= 4:
+                tall_measurements = 0;
+
+              tall_measurements = 0;
+              # rts_sig is a list of measurement text for a single signal, either from 
+              # the measurements list or just a selected signal. There are two possible
+              # formats, tall or wide. Tall may be specified in ini file for really 
+              # long signal names and or tall monitor displays. Default is wide which
+              # attempts to cram as much info in just a few lines of text.
+              rts_sig = [];
+              if tall_measurements == 0:
+                c_txt_list[0] = c_txt_list[0].replace(" ","");
+                c_txt_list[1] = c_txt_list[1].replace(" ","");
+
+                if self.cursor_list[0].visible and self.cursor_list[1].visible:
+                  rts_sig += [ sig_name + " " + delta_txt ];
+                  if c_txt_list[0] != "" and c_txt_list[1] != "":
+                    rts_sig += [ "  " + c_txt_list[0] +", "+ c_txt_list[1] ];
+                  elif c_txt_list[0] != "" or c_txt_list[1] != "":
+                    rts_sig += [ "  " + c_txt_list[0] + c_txt_list[1] ];
                   else:
-                    val_str = "%d " % int(val_raw);
+                    rts_sig += [ "  " ];
+                  
+                elif self.cursor_list[0].visible or self.cursor_list[1].visible:
+                  rts_sig += [ sig_name + " " + c_txt_list[0] + c_txt_list[1] ];
+                else:
+                  rts_sig += [ sig_name ];
+                
+                if range_txt != "":
+                  rts_sig += [ " "+range_txt ];
+                if min_max_txt != "":
+                  rts_sig += [ " "+min_max_txt ];
+                if upd_txt != "":
+                  rts_sig += [ " "+upd_txt ];
+                if vo_txt != "":
+                  rts_sig += [ " "+vo_txt ];
+              else:
+                rts_sig += [ sig_name ];
+                if range_txt != "":
+                  rts_sig += [ " "+range_txt ];
+                if min_max_txt != "":
+                  rts_sig += [ " "+min_max_txt ];
+                if upd_txt != "":
+                  rts_sig += [ " "+ upd_txt ];
+                if vo_txt != "":
+                  rts_sig += [ " "+vo_txt ];
+                if self.cursor_list[0].visible and self.cursor_list[1].visible:
+                  rts_sig += ["  "+ delta_txt ];
+                if self.cursor_list[0].visible:
+                  rts_sig += [ c_txt_list[0] ];
+                if self.cursor_list[1].visible:
+                  rts_sig += [ c_txt_list[1] ];
 
-                  if each_sig.units != None:
-                    val_str += " " + each_sig.units;
-                  rts += [indent+"C%d = %s" % ( (i+1), val_str ) ];
+            if ( ( j == 0 and ( each_sig in self.measurement_list ) ) or
+                 ( j == 1 and     each_sig.selected                 )    ):
+              rts += rts_sig;
 
-          # Measure the amplitude delta between the two cursors on selected signal
-          if ( each_sig.format == "analog" and len( analog_value_list ) == 2 ):
-            if self.cursor_list[0].visible and self.cursor_list[1].visible:
-              v_delta = abs( analog_value_list[0] - analog_value_list[1] );
-#             rts += [indent+delta+"A = %0.3f %s" % ( v_delta, each_sig.units )];
-              rts += [indent+delta+" = %0.3f %s" % ( v_delta, each_sig.units )];
+    # Display any tool tips at the very bottom
+    if self.vars["tool_tips_text_stats_en"].lower() in [ "true", "1", "yes" ]:
+      analog_signals_selected = False;
+      digital_signals_selected = False;
+      for each_signal in self.signal_list:
+        if each_signal.selected and each_signal.type == "analog":
+          analog_signals_selected = True;
+        if each_signal.selected and each_signal.type == "digital":
+          digital_signals_selected = True;
+      if analog_signals_selected:
+        rts += ["ToolTip: ArrowKeys"];
+        rts += [" Up/Down: Vert Scale"];
+        rts += [" +Ctrl  : Fine Scale  "];
+        rts += [" +Shift : Vert Offset"];
+      if digital_signals_selected:
+        if self.file_dialog == None and not self.cmd_console.visible:
+          rts += ["ToolTip: Search"];
+          rts += [" ? : Prev Transition"];
+          rts += [" / : Next Transition"];
 
+    max_txt_width = int( self.vars["screen_max_text_stats_width"],10 );
+    rts = [ each[0:max_txt_width] for each in rts ];# list comprehension
+    self.text_stats = ( rts, extra_txt_list, (x1,y1), bold_i );
 #   display_raw_text( self, rts, ( x1,y1 ), bold_i );
-    self.text_stats = ( rts, (x1,y1), bold_i );
          
 
   # Acquisition panel is open. Display HW cfg, status and user adjustable
@@ -1512,6 +2017,7 @@ def display_text_stats( self ):
     x1 = x;
     y1 = y+h;
     acq_list = [];
+#   acq_status = [];
     if self.vars["uut_name"] == None:
       acq_list += ["UUT not defined"];
     else:
@@ -1535,26 +2041,31 @@ def display_text_stats( self ):
         rts = create_text_stats( self, each, i );
         if rts != False:
           acq_list += [ rts ];
+# if self.container_acquisition_list[0].visible == True:
+      extra_txt_list += ["Trigger List:"];
+      for each_sig in self.signal_list:
+        if each_sig.trigger:
+          extra_txt_list += [" "+each_sig.name];
+#HERE52
     else:
 #     acq_list += ["SUMP not connected"];
       acq_list += ["HW Status: Not Connected"];
 #   ( x,y,w,h ) = display_raw_text( self, acq_list, ( x1,y1 ), bold_i );
 #   self.select_text_rect = ( x,y,w,h );
-    self.text_stats = ( acq_list, (x1,y1), bold_i );
+    self.text_stats = ( acq_list, extra_txt_list, (x1,y1), bold_i );
 
-  if self.tool_tip_obj_id != None and self.tool_tip_tick_time != None:
-    # Delay the hover to popup by 1 second as too fast popup is annoying.
-    if self.pygame.time.get_ticks() - self.tool_tip_tick_time > 1000:
-      rts = convert_object_id_to_tool_tip( self, self.tool_tip_obj_id );
-      if ( x1 != None and y1 != None and rts != None ):
-        self.text_stats = ( rts, (x1,y1), bold_i );
-#   print ( rts );
+# if self.tool_tip_obj_id != None and self.tool_tip_tick_time != None:
+#   # Delay the hover to popup by 1 second as too fast popup is annoying.
+#   if self.pygame.time.get_ticks() - self.tool_tip_tick_time > 1000:
+#     rts = convert_object_id_to_tool_tip( self, self.tool_tip_obj_id );
+#     if ( x1 != None and y1 != None and rts != None ):
+#       self.text_stats = ( rts, (x1,y1), bold_i );
   return;
 
 def draw_text_stats( self, stat_tuple ):
   if stat_tuple != None:
-    ( txt_list, (x1,y1), bold_i ) = stat_tuple;
-    ( x,y,w,h ) = display_raw_text( self, txt_list, ( x1,y1 ), bold_i );
+    ( txt_list, extra_txt_list, (x1,y1), bold_i ) = stat_tuple;
+    ( x,y,w,h ) = display_raw_text( self, txt_list, extra_txt_list, ( x1,y1 ), bold_i );
     self.select_text_rect = ( x,y,w,h );
   return;
 
@@ -1676,6 +2187,17 @@ def create_text_stats( self, single_stat, which_i ):
       sample_period_us = clk_us * val;
       val = sample_period_us;
 
+#HERE44
+      if self.sump_connected:
+        ana_ram_depth    = self.sump.cfg_dict['ana_ram_depth'];
+        ana_rec_profile  = self.sump.cfg_dict['ana_record_profile'];
+        record_len       = ( ana_rec_profile & 0xFF000000 ) >> 24;
+        ana_sample_depth = int( ana_ram_depth / record_len );
+        sample_window_us = ana_sample_depth * sample_period_us;
+        self.vars["sump_ls_sample_window"] = "%d" % sample_window_us;
+      else:
+        self.vars["sump_ls_sample_window"] = "%d" % 0;
+
     if ( val > 1000000 ):
       val = val / 1000000.0; disp_units = "S";
     elif ( val > 1000 ):
@@ -1689,18 +2211,16 @@ def create_text_stats( self, single_stat, which_i ):
 ###############################################################################
 # Acquisition ( trigger ) text has been selected and either scroll wheel or
 # arrow has been pressed to increase parameter
-def proc_acq_adj_inc( self ):
-# print("proc_acq_adj_inc()");
-  proc_acq_adj(self, +1 );
+def proc_acq_adj_inc( self, rate ):
+  proc_acq_adj(self, 1*rate );
   return;
 
 
 ###############################################################################
 # Acquisition ( trigger ) text has been selected and either scroll wheel or
 # arrow has been pressed to increase parameter
-def proc_acq_adj_dec( self ):
-# print("proc_acq_adj_dec()");
-  proc_acq_adj(self, -1 );
+def proc_acq_adj_dec( self, rate ):
+  proc_acq_adj(self, -1*rate );
   return; 
 
 
@@ -1709,8 +2229,9 @@ def proc_acq_adj_dec( self ):
 # arrow has been pressed to increase parameter
 def proc_acq_adj( self, step ):
 # print("proc_acq_adj() : self.select_text_i = %s" % self.select_text_i );
-  ( acq_list, (x1,y1), bold_i ) = self.text_stats;
+  ( acq_list, extra_txt_list, (x1,y1), bold_i ) = self.text_stats;
   acq_list_len = len( acq_list );# Needed to calculate offset into parms from gen text
+
 
   if self.select_text_i != None:
     value = 0;
@@ -1723,7 +2244,15 @@ def proc_acq_adj( self, step ):
       ( disp_name, var_name, disp_units ) = self.acq_parm_list[ self.select_text_i + i_offset ];
     except:
       ( disp_name, var_name, disp_units ) = ( None, None , None );
-      print("ERROR-5623");
+      log( self, [ "ERROR-5623" ] );
+
+    # Trigger level has coarse (+/-8) and fine (+/-1) rates. Everything else is just +/-1
+    if var_name != "sump_trigger_analog_level" and \
+       var_name != "sump_trigger_delay"              :
+      if step > 1:
+        step = 1;
+      elif step < 1:
+        step = -1;
 
     if var_name == "sump_trigger_nth":
       val_int = int( self.vars[var_name], 10 );
@@ -1743,16 +2272,25 @@ def proc_acq_adj( self, step ):
       self.vars[var_name] = self.acq_trig_list[i].lower();
       
     elif var_name == "sump_trigger_analog_level":
-#     print("Oy!");
       val_f = float( self.vars[var_name] );
       min_val = 0; max_val = 0;
       # The trigger assigned signal determines the range for analog trigger level
       for each_sig in self.signal_list:
-        print( each_sig.name, each_sig.trigger, each_sig.type );
+#       print( each_sig.name, each_sig.trigger, each_sig.type );
         if each_sig.trigger and each_sig.type == "analog":
-          max_val = each_sig.range * each_sig.units_per_code;
-          min_val = 0;
-          val_f += step * each_sig.units_per_code;
+# 2025.01.20
+#         max_val = each_sig.range * each_sig.units_per_code;
+#         min_val = 0;
+#         step_adc = step * ((each_sig.range+1)//128);# Roughly 1% +/- change 
+          if each_sig.range+1 <= 256:
+            step_adc = step;
+          else:
+            step_adc = step * ((each_sig.range+1)//1024);# Roughly 1% +/- change when step is 8
+          max_val = each_sig.offset_units + ( each_sig.range * each_sig.units_per_code );
+          min_val = each_sig.offset_units + 0.0;
+          val_f += step_adc * each_sig.units_per_code;
+          val_f = round( val_f, 3 );
+
           # Re-assign the units from say mV to uA
           disp_units = each_sig.units;
           self.acq_parm_list[ self.select_text_i + i_offset ] = ( disp_name, var_name, disp_units );  
@@ -1762,7 +2300,7 @@ def proc_acq_adj( self, step ):
 #         print("  val_f l = %f" % val_f   );
       if val_f < min_val : val_f = min_val;
       if val_f > max_val : val_f = max_val;
-      self.vars[var_name] = "%f" % val_f;
+      self.vars[var_name] = "%.3f" % val_f;
       
 
     elif var_name == "sump_trigger_delay":
@@ -1787,8 +2325,6 @@ def proc_acq_adj( self, step ):
       if val_f < min_delay : val_f = min_delay;
       if val_f > max_delay : val_f = max_delay;
       self.vars[var_name] = "%0.0f" % val_f;
-
-
 
 #     print("max_delay = %d" % max_delay );
 #     trig_delay = int( 1000.0 * trig_delay / clk_ns );
@@ -1844,10 +2380,10 @@ def proc_acq_adj( self, step ):
         record_len       = ( ana_rec_profile & 0xFF000000 ) >> 24;
         ana_sample_depth = int( ana_ram_depth / record_len );
         dig_sample_depth = self.sump.cfg_dict['dig_ram_depth'];
-        sample_window_us = ana_sample_depth * sample_period_us;
-        self.vars["sump_ls_sample_window"] = "%d" % sample_window_us;
-      else:
-        self.vars["sump_ls_sample_window"] = "%d" % 0;
+#       sample_window_us = ana_sample_depth * sample_period_us;
+#       self.vars["sump_ls_sample_window"] = "%d" % sample_window_us;
+#     else:
+#       self.vars["sump_ls_sample_window"] = "%d" % 0;
   return;
 
 
@@ -1855,22 +2391,23 @@ def proc_acq_adj( self, step ):
 # Display raw PyGame text lines at specified raw (x,y) location and return
 # a (x,y,w,h) tuple of the rectangle area that the text occupies
 # bold_i is the selected text line, if any, that the user may modify value.
-def display_raw_text( self, txt_list, position, bold_i ):
-# HERE52
+def display_raw_text( self, txt_list, extra_txt_list, position, bold_i ):
   (x,y) = position;
   x1 = x;
   y1 = y + self.txt_toolbar_height/3;
   h = self.txt_toolbar_height / 3; w = 0;
-  for (i,each_line) in enumerate(txt_list):
+# for (i,each_line) in enumerate(txt_list):
+  for (i,each_line) in enumerate(txt_list + extra_txt_list ):
     clr = self.color_fg;
     if bold_i != None:
       self.font_toolbar.set_bold( i == bold_i );
       self.font_toolbar.set_underline( i == bold_i );
       if i == bold_i:
         clr = self.color_selected;
-#   txt = self.font.render( each_line,True, self.color_white );
-    txt = self.font_toolbar.render( each_line,True, clr );
-    self.screen.blit(txt, (x1,y1) );
+    # Don't render off screen
+    if y1 + 5 + self.txt_toolbar_height < self.screen_height:
+      txt = self.font_toolbar.render( each_line,True, clr );
+      self.screen.blit(txt, (x1,y1) );
     y1 += self.txt_toolbar_height;
     h += self.txt_toolbar_height;
     if txt.get_width() > w:
@@ -1885,7 +2422,12 @@ def mouse_get_text( self ):
   ( x,y,w,h ) = self.select_text_rect;
   if ( ( self.mouse_x > x ) and ( self.mouse_x < x+w ) and
        ( self.mouse_y > y ) and ( self.mouse_y < y+h )     ):
-    self.select_text_i = int( ( self.mouse_y - y - self.txt_height/3 ) / self.txt_height );
+    self.select_text_i = int( ( self.mouse_y - y - self.txt_toolbar_height/3 ) / self.txt_toolbar_height );
+
+    # Deselect any selected signals as K_UP and K_DOWN won't be available
+    # if an analog signal is selected.
+    for each_sig in self.signal_list:
+      each_sig.selected = False;
 
   # Prevent selecting Read Only text fields like HS Clock and HS Window
   # this is a bit of a hardcoded hack knowing HS Clock and HS Window are at 0,1
@@ -1925,23 +2467,20 @@ def mouse_event_single_click( self ):
 #         # otherwsie select it if right 3/4 of text is clicked.
 #         if each_signal.collapsable and ( self.mouse_x < ( x1+x2+w2/4 ) ):
 
-          # If left 1/2 of text is clicked on a collapsable, toggle it
-          # otherwise select it if right 1/2 of text is clicked.
-          if each_signal.collapsable and ( self.mouse_x < ( x1+x2+w2/2 ) ):
+#         # If left 1/2 of text is clicked on a collapsable, toggle it
+#         # otherwise select it if right 1/2 of text is clicked.
+#         if each_signal.collapsable and ( self.mouse_x < ( x1+x2+w2/2 ) ):
+
+          # If left 1/3 of text is clicked on a collapsable, toggle it
+          # otherwise select it if right 2/3 of text is clicked.
+          if each_signal.collapsable and ( self.mouse_x < ( x1+x2+w2/3 ) ):
             each_signal.collapsed = not each_signal.collapsed;
             # Now find any children and change their visibility
             if each_signal.collapsed:
               proc_collapse_group(self, each_signal );
-#             recursive_signal_collapse( self, parent_name = each_signal.name );
             else:
-              proc_expand_group(self, each_signal );
 #             # Expand one level down only
-#             for each_sig in self.signal_list:
-#               if each_sig.member_of == each_signal.name:
-#                 if each_signal.collapsed:
-#                   each_sig.visible = False;
-#                 else:
-#                   each_sig.visible = True;
+              proc_expand_group(self, each_signal );
             self.mouse_btn1_up_time = 0;# Used for double-click detection
             self.mouse_btn1_up_time_last = 0;
           else:
@@ -1953,7 +2492,6 @@ def mouse_event_single_click( self ):
                 if each_sig != each_signal:
                   each_sig.selected = False;
             # Now select the selected signal
-#           each_signal.selected = True;
             each_signal.selected = not each_signal.selected;# Toggle
   return rts;
 
@@ -2009,7 +2547,7 @@ def mouse_event_single_click_waveform( self ):
   return rts;
 
 def proc_expand_group( self, my_sig ):
-  print("proc_expand_group() %s" % my_sig.name );
+# print("proc_expand_group() %s" % my_sig.name );
   # Expand one level down only and stop. Only collapse uses recursion
   my_sig.collapsed = False;
   for each_sig in self.signal_list:
@@ -2019,13 +2557,14 @@ def proc_expand_group( self, my_sig ):
       if my_sig.collapsed:
         each_sig.visible = False;
       else:
-        if each_sig.rle_masked == False:
-          each_sig.visible = True;
+# 2025.01.27
+#       if each_sig.rle_masked == False:
+        each_sig.visible = True;
   return;
 
 def proc_collapse_group( self, my_sig ):
   my_sig.collapsed = True;
-  print("proc_collapse_group() %s" % my_sig.name );
+# print("proc_collapse_group() %s" % my_sig.name );
   recursive_signal_collapse( self, parent = my_sig );
   return;
 
@@ -2042,11 +2581,6 @@ def recursive_signal_collapse( self, parent ):
   return;
 
 
-# recursive_signal_collapse( self, parent_name = my_sig.name );
-#def recursive_signal_collapse( self, parent_name ):
-#   if each_sig.member_of == parent.name:
-#   if each_sig.member_of == parent.name and each_sig.timezone == parent.timezone:
-#     print("recursive_signal_collapse() Found child %s" % each_sig.name );
 
 
 # Note : this works but decided against using it. <END> key only 
@@ -2128,7 +2662,7 @@ def mouse_move_cursor( self ):
         vasili = False;
       else:
         each_cursor.selected = False;
-        print("WARNING: Two cursors were selected. Dropping 2nd");
+#       print("WARNING: Two cursors were selected. Dropping 2nd");
   return rts;
 
 
@@ -2138,7 +2672,8 @@ def mouse_release_cursor( self ):
   for each_cursor in self.cursor_list:
     if ( each_cursor.visible == True and each_cursor.selected == True ):
       each_cursor.selected = False;
-      update_cursors_to_mouse(self);
+# 2025.03.07 : Note, this resulted in cursor changing on button release
+#     update_cursors_to_mouse(self);
 #     print("Released!");
   return;
 
@@ -2177,9 +2712,11 @@ def mouse_get_zone( self ):
            ( self.mouse_y > y   ) and
            ( self.mouse_y < y+h )     ):
         wave_win = i;
-        if (     self.mouse_x < (x + w/4    ) ):
+#       if (     self.mouse_x < (x + w/4    ) ):
+        if (     self.mouse_x < (x + w/8    ) ):
           win_reg = 1;
-        elif (   self.mouse_x > (x + w - w/4) ):
+#       elif (   self.mouse_x > (x + w - w/4) ):
+        elif (   self.mouse_x > (x + w - w/8) ):
           win_reg = 4;
         elif (   self.mouse_y < (y + h/2    ) ):
           win_reg = 2;
@@ -2209,14 +2746,15 @@ def convert_object_id_to_tool_tip( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Query"       : cmd_str = "sump_query";
   elif id_str == "#Controls.#Acquisition.#Force_Trig"  : cmd_str = "sump_force_trig";
   elif id_str == "#Controls.#Acquisition.#Set_Trigs"   : cmd_str = "sump_set_trigs";
-  elif id_str == "#Controls.#Acquisition.#Clr_Trigs"   : cmd_str = "sump_clr_trigs";
+# elif id_str == "#Controls.#Acquisition.#Clr_Trigs"   : cmd_str = "sump_clr_trigs";
+  elif id_str == "#Controls.#Acquisition.#Clear_Trigs" : cmd_str = "sump_clear_trigs";
   elif id_str == "#Controls.#Acquisition.#Force_Stop"  : cmd_str = "sump_force_stop";
   elif id_str == "#Controls.#Acquisition.#Save_PZA"    : cmd_str = "save_pza";
   elif id_str == "#Controls.#Acquisition.#Load_PZA"    : cmd_str = "load_pza";
   elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
   elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
-  elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
-  elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
+# elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
   elif id_str == "#Controls.#Acquisition.#Save_List"   : cmd_str = "save_list";
   elif id_str == "#Controls.#Acquisition.#Save_View"   : cmd_str = "save_view";
 
@@ -2390,17 +2928,21 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Acquisition.#Query"       : cmd_str = "sump_query";
   elif id_str == "#Controls.#Acquisition.#Force_Trig"  : cmd_str = "sump_force_trig";
   elif id_str == "#Controls.#Acquisition.#Set_Trigs"   : cmd_str = "sump_set_trigs";
-  elif id_str == "#Controls.#Acquisition.#Clr_Trigs"   : cmd_str = "sump_clr_trigs";
+# elif id_str == "#Controls.#Acquisition.#Clr_Trigs"   : cmd_str = "sump_clr_trigs";
+  elif id_str == "#Controls.#Acquisition.#Clear_Trigs" : cmd_str = "sump_clear_trigs";
   elif id_str == "#Controls.#Acquisition.#Force_Stop"  : cmd_str = "sump_force_stop";
   elif id_str == "#Controls.#Acquisition.#Save_PZA"    : cmd_str = "save_pza";
   elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
 # elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
-  elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
-  elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
+# elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
+# elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
   elif id_str == "#Controls.#Acquisition.#Save_List"   : cmd_str = "save_list";
   elif id_str == "#Controls.#Acquisition.#Save_View"   : cmd_str = "save_view";
+  elif id_str == "#Controls.#Acquisition.#Save_Window" : cmd_str = "save_window";
+  elif id_str == "#Controls.#Acquisition.#Save_Screen" : cmd_str = "save_screen";
   elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
   elif id_str == "#Controls.#Views.#RemoveAll"         : cmd_str = "remove_view_all";
+
   elif id_str == "#Controls.#Display.#ZoomIn"          : cmd_str = "zoom_in";
   elif id_str == "#Controls.#Display.#ZoomOut"         : cmd_str = "zoom_out";
   elif id_str == "#Controls.#Display.#ZoomCurs"        : cmd_str = "zoom_to_cursors";
@@ -2416,6 +2958,10 @@ def convert_object_id_to_cmd( self, id_str ):
 # elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
   elif id_str == "#Controls.#Display.#TimeSnap"        : cmd_str = "time_snap";
   elif id_str == "#Controls.#Display.#TimeLock"        : cmd_str = "time_lock";
+  elif id_str == "#Controls.#Display.#Save_Window"     : cmd_str = "save_window";
+  elif id_str == "#Controls.#Display.#Save_Screen"     : cmd_str = "save_screen";
+  elif id_str == "#Controls.#Display.#Add_Measure"     : cmd_str = "add_measurement";
+  elif id_str == "#Controls.#Display.#Remove_Meas"     : cmd_str = "remove_measurement";
 
   elif id_str == "#Controls.#Views.#MaskSig"           : cmd_str = "mask_toggle_signal";
   elif id_str == "#Controls.#Views.#HideSig"           : cmd_str = "hide_toggle_signal";
@@ -2481,7 +3027,11 @@ def convert_object_id_to_cmd( self, id_str ):
 def shutdown(self):
   log( self, ["shutdown()"] );
   if self.sump_connected:
+    cmd_thread_pool_surrender_id(self);
     cmd_sump_sleep(self);
+    if self.vars["bd_server_quit_on_close"].lower() in ["true","yes","1"]:
+      log( self, ["bd_server( quit )"] );
+      self.bd.quit();
     self.bd.close();
 
 # This doesn't work as SDL variable doesn't update after window has moved.
@@ -2593,7 +3143,7 @@ def create_cursor_lines(self):
       elif each_cur.trig_delta_unit == "ns": t1 *= 1.0;
       elif each_cur.trig_delta_unit == "ps": t1 *= 0.001;
       else                                 : t1  = 0.0;# Invalid time unit
-      for each_win in self.window_list:
+      for (j,each_win) in enumerate(self.window_list):
         if each_win.trigger_index != None and each_win.sample_period != None:
           t2 = each_win.sample_period;
           if   each_win.sample_unit == "ms": t2 *= 1000000.0;
@@ -2605,8 +3155,12 @@ def create_cursor_lines(self):
           # How many samples is this cursor from the trigger?
           cur_sample_delta = t1 / t2;
           cur_index_location = each_win.trigger_index + cur_sample_delta;
-          cur_index_offset   = cur_index_location - each_win.samples_start_offset;
+#         cur_index_offset   = cur_index_location - each_win.samples_start_offset;
+# New 2025.03.10  this +1 aligns LS trigger with RLE trigger
+          cur_index_offset   = cur_index_location - each_win.samples_start_offset + 1;
           cur_x              = cur_index_offset * each_win.x_space;
+#         print("Cursor is %d : Window is %d : trig_delta_t = %d : sample_period = %d" %
+#                (i,j,t1,t2) );
           each_win.cursor_x_list[i] = int( cur_x );
           if wave_i != None:
             if each_win == self.window_list[wave_i]:
@@ -2627,11 +3181,19 @@ def update_cursors_to_mouse( self ):
         # New 2023.09.05
         if each_cur.selected or \
           ( not self.cursor_list[0].selected and not self.cursor_list[1].selected ):
-          cur_i = my_win.samples_start_offset + ( each_cur.x / my_win.x_space );
-#         print( cur_i, my_win.trigger_index, my_win.sample_period );
-          cur_delta_t = ( cur_i -  my_win.trigger_index ) * my_win.sample_period;
-          each_cur.trig_delta_t    = cur_delta_t;# distance from cursor to trigger
-          each_cur.trig_delta_unit = my_win.sample_unit;
+          try:
+            cur_i = my_win.samples_start_offset + ( each_cur.x / my_win.x_space );
+#           cur_delta_t = ( cur_i -  my_win.trigger_index ) * my_win.sample_period;
+# New 2025.03.10 this -1 aligns LS trigger with RLE trigger
+            cur_delta_t = ( cur_i -  my_win.trigger_index-1 ) * my_win.sample_period;
+            each_cur.trig_delta_t    = cur_delta_t;# distance from cursor to trigger
+            each_cur.trig_delta_unit = my_win.sample_unit;
+          except:
+#           print("ERROR-452");
+            log( self, [ "ERROR-452" ] );
+            print( cur_i, my_win.trigger_index, my_win.sample_period );
+#                                None             None  digital_ls_0
+
 #         print( cur_delta_t );
 
 #   if my_win.timezone == "rle":
@@ -2651,6 +3213,8 @@ def update_cursors_to_mouse( self ):
 ###############################################################################
 # When the active window switches, the cursors need to have their trigger
 # relative positions updated as the sample units may change ( ie ns to us )
+# Deprecated 2025.03.10 and is no longer called. Cursors now close 
+# when switching active windows
 def update_cursors_to_window( self ):
   if self.window_selected != None:
     for each_cur in self.cursor_list:
@@ -2675,6 +3239,7 @@ def update_cursors_to_window( self ):
           elif my_win.sample_unit == "ns":
             each_cur.trig_delta_t /= 1.0;
           each_cur.trig_delta_unit = my_win.sample_unit;
+#         print("my_win.sample_unit is %s" % my_win.sample_unit );
   self.refresh_cursors = True;
   return;
 
@@ -2698,7 +3263,6 @@ def draw_digital_lines( self, my_window ):
   w = my_surface.get_width();
   h = my_surface.get_height();
 
-
 # if ( my_window.samples_shown != None and
 #      my_window.samples_total != None     ):
 #   start = ( ( my_window.samples_start_offset ) / my_window.samples_total );
@@ -2706,6 +3270,47 @@ def draw_digital_lines( self, my_window ):
 #   print( start, stop );
 #       if samples_to_draw != 0:
 #         rle_time_to_pixels = float( w / samples_to_draw ); # ratio that converts time in ps to pixels
+
+  # Draw the gridlines Graticule
+  if my_window.grid_enable :
+    x_step = int( w / 10.0 );
+    y_step = int( h / 10.0 );
+#enumerate
+    for x in range( 0,w,x_step):
+      self.pygame.draw.line(my_surface,self.color_grid,(x,0),(x,h), 1);
+#   for y in range( 0,h,y_step):
+    for (i,y) in enumerate( range( 0,h,y_step) ):
+      thickness = 1;
+      if i == 5:
+        thickness = 3;
+      self.pygame.draw.line(my_surface,self.color_grid,(0,y),(w,y), thickness);
+
+  analog_line_width = int( self.vars["screen_analog_line_width"], 10 );
+  analog_bold_width = int( self.vars["screen_analog_bold_width"], 10 );
+
+  # Draw the analog waveforms           
+  for (each_sig, y_space, each_line_list, each_point_list) in my_draw_list:
+    if len( each_line_list ) != 0 and each_sig.format == "analog" and each_sig.hidden == False:
+      sig_color = rgb2color( each_sig.color );
+#     if each_sig.selected:
+#       sig_color = self.color_selected;
+#     elif each_sig.trigger and each_sig.triggerable:
+      if each_sig.trigger and each_sig.triggerable:
+        sig_color = self.color_trigger;
+      if each_sig.selected:
+        sig_line_width = analog_bold_width;# 1 is hard to see
+      else:
+        sig_line_width = analog_line_width;# 1 is hard to see
+      try:
+        self.pygame.draw.lines(my_surface,sig_color,False,each_line_list,sig_line_width);
+        circle_radius = 2;
+#       if int( self.vars["screen_adc_sample_points"], 10 ) == 1:
+        if True:
+          for (x,y) in each_point_list:
+            self.pygame.draw.line(my_surface,sig_color, (x,y-1),(x,y+1), 2);
+#           self.pygame.draw.circle(my_surface,sig_color,(x,y),circle_radius,0);
+      except:
+        log(self,["ERROR-2011 : Analog drawing failure"]);
 
   # Draw the trigger
   if my_trigger_x != None:
@@ -2715,9 +3320,6 @@ def draw_digital_lines( self, my_window ):
     x2 = my_trigger_x;
     y1 = 0;
     y2 = h;
-#   self.pygame.draw.line(my_surface,self.color_red,(x1,y1),(x2,y2), 1);
-#   color_cursor = self.cursor_list[0].color;
-#   self.pygame.draw.line(my_surface,color_cursor,(x1,y1),(x2,y2), 1);
     self.pygame.draw.line(my_surface,self.color_trigger,(x1,y1),(x2,y2), 1);
 
   # Draw the binary digital signals
@@ -2734,32 +3336,14 @@ def draw_digital_lines( self, my_window ):
         except:
           log(self,["ERROR-1993 %d %s" % ( len(each_line_list), each_line_list )]);
 
-  # Draw the analog waveforms           
-  for (each_sig, y_space, each_line_list, each_point_list) in my_draw_list:
-    sig_color = rgb2color( each_sig.color );
-    if each_sig.selected:
-      sig_color = self.color_selected;
-    elif each_sig.trigger and each_sig.triggerable:
-      sig_color = self.color_trigger;
-    sig_line_width = 2;# 1 is hard to see
-
-    if len( each_line_list ) != 0 and each_sig.format == "analog" and each_sig.hidden == False:
-      try:
-        self.pygame.draw.lines(my_surface,sig_color,False,each_line_list,sig_line_width);
-        circle_radius = 2;
-        for (x,y) in each_point_list:
-          self.pygame.draw.circle(my_surface,sig_color,(x,y),circle_radius,0);
-      except:
-        log(self,["ERROR-2011 : Analog drawing failure"]);
-
   # Draw the gridlines
-  if my_window.grid_enable :
-    x_step = int( w / 10.0 );
-    y_step = int( h / 10.0 );
-    for x in range( 0,w,x_step):
-      self.pygame.draw.line(my_surface,self.color_grid,(x,0),(x,h), 1);
-    for y in range( 0,h,y_step):
-      self.pygame.draw.line(my_surface,self.color_grid,(0,y),(w,y), 1);
+# if my_window.grid_enable :
+#   x_step = int( w / 10.0 );
+#   y_step = int( h / 10.0 );
+#   for x in range( 0,w,x_step):
+#     self.pygame.draw.line(my_surface,self.color_grid,(x,0),(x,h), 1);
+#   for y in range( 0,h,y_step):
+#     self.pygame.draw.line(my_surface,self.color_grid,(0,y),(w,y), 1);
 
   txt_y_offset = 1;
 
@@ -2774,8 +3358,6 @@ def draw_digital_lines( self, my_window ):
               my_surface.blit(txt, (x1,int(y1+txt_y_offset)) );
             except:
               log(self,["ERROR-2041 (%s,%s)" % (x1,int(y1+txt_y_offset))]);
-
-
 
   # Draw the signal names - 1st drawing a black box beneath. 
   # Don't draw if spacing is less than font height
@@ -2807,7 +3389,11 @@ def draw_digital_lines( self, my_window ):
           txt = "[+]"+txt;
         else:
           txt = "[-]"+txt;
-      if each_sig.selected:
+#     if each_sig.selected:
+      # Only color highlight the digital selected. 
+      # Analog keeps normal color and goes bold and underlined.
+#     if each_sig.selected:
+      if each_sig.selected and each_sig.type != "analog":
         sig_color = self.color_selected;
       elif view_selected:
         sig_color = self.color_selected;
@@ -2902,6 +3488,7 @@ def draw_digital_lines( self, my_window ):
         try:
           self.pygame.draw.lines(my_surface,color_cursor,False,each_line_list,1);
         except:
+          log( self, [ "ERROR-254" ] );
           print("ERROR: Points must be numbered pairs");
           print(len(each_line_list));
           print( each_line_list );
@@ -2918,6 +3505,7 @@ def draw_digital_lines( self, my_window ):
             try:
               self.pygame.draw.lines(my_surface,color_cursor,False,each_line_list,1);
             except:
+              log( self, [ "ERROR-255" ] );
               print("ERROR: Points must be numbered pairs");
               print(len(each_line_list));
               print( each_line_list );
@@ -2986,7 +3574,7 @@ def draw_digital_lines( self, my_window ):
               last_x = x;
               last_txt = txt;
 
-  # Draw RLE Time Range in upper right corner #HERE99 and Window Number in upper left corner
+  # Draw RLE Time Range in upper right corner and Window Number in upper left corner
   my_color = self.color_fg;
   my_window_name_drawn = False;
   if self.window_selected != None:
@@ -3002,6 +3590,7 @@ def draw_digital_lines( self, my_window ):
     h1 = txt.get_height();
     self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect((w-w1),0,w1,h1) );
     my_surface.blit(txt, (w-w1,0));
+
 
   if y_scrolled_stats != None:
     (a,b,c) = y_scrolled_stats; # Total, Culled at top (neg), Drawn in Center
@@ -3023,6 +3612,15 @@ def draw_digital_lines( self, my_window ):
     h1 = txt.get_height();
     self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(0,0,w1,h1) );
     my_surface.blit(txt, (0,0));
+
+# if self.screen_shot:
+#   my_color = self.color_selected;
+#   txt = self.name + " " + self.vers + " " + self.copyright;
+#   txt = self.font.render(txt,True, my_color );
+#   w1 = txt.get_width();
+#   h1 = txt.get_height();
+#   self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(0,0,w1,h1) );
+#   my_surface.blit(txt, (0,0));
 
   my_image.set_image( my_surface );
   return;
@@ -3154,7 +3752,6 @@ def create_drawing_lines( self, my_win ):
         my_win.trigger_index = abs(rle_time_min);
         samples_to_draw = abs(rle_time_min) + rle_time_max;# Actually time in ps to draw
 #       print( rle_time_min, rle_time_max );
-        #HERE100
         rle_min_max = ( rle_time_min, rle_time_max );
       else:
         samples_to_draw = 0;
@@ -3518,6 +4115,7 @@ def create_drawing_lines( self, my_win ):
         last_value = viewable_value_list[0];
         last_x     = int(float(x));
         y0 = int( h * each_sig.vertical_offset);# Note that it scales with screen height
+        y0 += my_win.y_analog_offset;
 
         # Calculate the vertical scale using units_per_division
         # Note, if units_per_division is None then look for divisions_per_range and calculate from that.
@@ -3543,7 +4141,8 @@ def create_drawing_lines( self, my_win ):
  
      
         # If selected, Draw bars for Min/Max range
-        if each_sig.selected:
+#       if each_sig.selected:
+        if False:
           sig_color = self.color_selected;
           if each_sig.vertical_offset == 0.0 :
             y3 = y2 - int( 0 * v_scale );
@@ -3558,20 +4157,38 @@ def create_drawing_lines( self, my_win ):
 #       Last ADC sample is never present in RAM, so skip it.
         offscreen_top = True;
         offscreen_bot = True;
+
+        # If only one sample exists, draw a horizontal line from sample point to end
+        valid_sample_cnt = 0; last_valid_sample = None;
         for each_value in viewable_value_list[1:-1]:
+          if each_value != None:
+            valid_sample_cnt +=1;
+            last_valid_sample = each_value;
+        if valid_sample_cnt == 1:
+          viewable_value_list_too = viewable_value_list[1:-2] + tuple([ last_valid_sample ]);
+        else:
+          viewable_value_list_too = viewable_value_list[1:-1];
+
+#       for each_value in viewable_value_list[1:-1]:
+        for each_value in viewable_value_list_too:
           x1 = int(float(x));
           x += float(x_space);
           x2 = int(float(x));
           # ADC values don't always exist at each sample point
           if each_value != None and last_value != None:
-            # By default, waveform "gnd" reference is the signal name slot.
-            # If the user has specified a vertical offset, use that instead.
-            if each_sig.vertical_offset == 0.0 :
-              y3 = y2 - int( last_value * v_scale );
-              y4 = y2 - int( each_value * v_scale );
-            else:
-              y3 = y0 - int( last_value * v_scale );
-              y4 = y0 - int( each_value * v_scale );
+
+# Removed 2025.04.04 - Problematic when scrolling signal names, any analog
+#  signals with vertical_offset==0 would scroll with name. All by itself.
+#           # By default, waveform "gnd" reference is the signal name slot.
+#           # If the user has specified a vertical offset, use that instead.
+#           if each_sig.vertical_offset == 0.0 :
+#             y3 = y2 - int( last_value * v_scale );
+#             y4 = y2 - int( each_value * v_scale );
+#           else:
+#             y3 = y0 - int( last_value * v_scale );
+#             y4 = y0 - int( each_value * v_scale );
+            y3 = y0 - int( last_value * v_scale );
+            y4 = y0 - int( each_value * v_scale );
 
             if each_sig.selected:
               if y3 < 0 and y4 < 0:
@@ -3586,16 +4203,40 @@ def create_drawing_lines( self, my_win ):
                 offscreen_bot = False;
 
             line_list += [ ( last_x, y3 ) , ( x2, y4 ) ];
-            point_list += [ ( x2,y4 ) ];
+            if int( self.vars["screen_adc_sample_points"], 10 ) == 1:
+              point_list += [ ( x2,y4 ) ];
           if each_value != None:
             last_value = each_value;
             last_x     = x2;
+        # end for each_value in viewable_value_list[1:-1]:
+
         each_sig.offscreen = "";
         if each_sig.selected:
           if offscreen_top:
-            each_sig.offscreen = "^";
+            each_sig.offscreen = "--^^";
           if offscreen_bot:
-            each_sig.offscreen = "v";
+            each_sig.offscreen = "--vv";
+
+        # If selected, Draw dotted bars for Min/Max range
+        if each_sig.selected:
+          y3 = y0 - int( 0 * v_scale );
+          y4 = y0 - int( each_sig.range * v_scale );
+          for x3 in range(0,w,+10):
+            point_list += [ (x3,y3), (x3,y4) ];
+
+        # If selected, Draw bars for Min/Max range
+#       if each_sig.selected:
+#         if each_sig.vertical_offset == 0.0 :
+#           y3 = y2 - int( 0 * v_scale );
+#           y4 = y2 - int( each_sig.range * v_scale );
+#         else:
+#           y3 = y0 - int( 0 * v_scale );
+#           y4 = y0 - int( each_sig.range * v_scale );
+#         line_list += [ ( w+10,y4 ) , ( w, y4 ), ];
+#         line_list += [ ( w-10,y4 ) , ( w, y4 ), ];
+#         line_list += [ ( w,y3 ) , ( w-10, y3 ) ];
+# HERE 2025.01.17
+
 
         draw_list += [ ( each_sig, y_space, line_list, point_list ) ];
       else:
@@ -3693,6 +4334,36 @@ def init_display(self):
 # leaves residues that must be erased ourselves.
 def screen_erase(self):
   self.screen.fill( (0x00,0x00,0x00) );
+
+
+def screen_get_size(self):
+  ( self.screen_width, self.screen_height ) = self.screen.get_size();
+  return;
+
+def screen_set_size(self):
+  self.refresh_waveforms = True;
+# self.screen= pygame.display.set_mode(event.dict['size'], pygame.RESIZABLE );
+
+  # Make Widescreen 16:9 SD the minimum allowed
+  if self.screen_width < 720 or self.screen_height < 576:
+    self.screen_width = 720;
+    self.screen_height = 576;
+
+  self.screen = pygame.display.set_mode( (self.screen_width,self.screen_height), 
+      pygame.RESIZABLE );
+  self.options.resolution = ( self.screen_width, self.screen_height );
+  self.ui_manager.set_window_resolution(self.options.resolution)
+  screen_erase(self);
+  resize_containers(self);
+ 
+  # Since cursors are mouse positioned, they may go off-screen on a resize
+  # To prevent this, on any resize, place them back on the left.
+  self.cursor_list[0].x = 20;
+  self.cursor_list[1].x = 40;
+
+  self.vars["screen_width"]  = str( self.screen_width );
+  self.vars["screen_height"] = str( self.screen_height );
+  return;
 
 
 ###############################################################################
@@ -3946,6 +4617,10 @@ def init_widgets(self):
   self.cmd_console.close_window_button = False;
 # self.cmd_console.enable_close_button = False;
 # self.cmd_console.bring_to_front_on_focused = True;
+# self.cmd_console.set_log_prefix('bd_shell>');
+
+# print( dir( self.cmd_console ) );
+# self.cmd_console.add('bd_shell>');
 
   resize_containers(self);# Resize based on screen dimensions
 
@@ -3968,12 +4643,14 @@ def init_widgets(self):
                       "Arm",         "Acquire",
                       "Query",       "Download",
                       "Force_Trig",  "Force_Stop",    
-                      "Set_Trigs",   "Clr_Trigs",
+                      "Set_Trigs",   "Clear_Trigs",
+#                     "Set_Trigs",   "Clr_Trigs",
                       "",
                       "Save_PZA",    "Load_PZA",
                       "Save_VCD",    "Load_VCD",
-                      "Save_PNG",    "Save_JPG",      
+#                     "Save_PNG",    "Save_JPG",      
                       "Save_List",   "Save_View",      
+                      "Save_Window", "Save_Screen",
                     ];
 
   y_top += container_builder_acquisition( self, rect, self.y_top, button_txt_list );
@@ -4000,6 +4677,12 @@ def init_widgets(self):
   # Note the null strings provide some extra spacing for unrelated
   button_txt_list = [ "Window-1",     "Window-2",     
                       "Window-3",     "bd_shell",
+                      "",
+                      "Save_Window",  "Save_Screen",
+                      "",
+                      "Cursor-1",     "Cursor-2",     
+                      "Add_Measure",  "Remove_Meas",
+
 #                     "Font--",       "Font++",
 #                     "",
 #                     "Save_PNG",     "Save_JPG",      
@@ -4010,7 +4693,6 @@ def init_widgets(self):
 #                     "CutSig",       "DeleteSig",     
                       "",
                       "TimeSnap",     "TimeLock",     
-                      "Cursor-1",     "Cursor-2",     
                       "ZoomIn",       "ZoomOut",      
                       "ZoomCurs",     "ZoomFull",      
                       "<-Search",     "Search->",      
@@ -4301,6 +4983,34 @@ def container_builder_display( self, rect, y_top, button_txt_list ):
   return ( y + margin ); 
 
 
+def cmd_select_acquisition( self ):
+  self.container_acquisition_list[0].visible = True;
+  self.container_display_list[0].visible     = False;
+  self.container_view_list[0].visible        = False;
+  self.select_text_i                         = None;# Clear old text selections
+  self.refresh_waveforms                     = True;
+  proc_main_menu_button_press( self );
+  return [];
+
+def cmd_select_navigation( self ):
+  self.container_acquisition_list[0].visible = False;
+  self.container_display_list[0].visible     = True;
+  self.container_view_list[0].visible        = False;
+  self.select_text_i                         = None;# Clear old text selections
+  self.refresh_waveforms                     = True;
+  proc_main_menu_button_press( self );
+  return [];
+
+def cmd_select_viewconfig( self ):
+  self.container_acquisition_list[0].visible = False;
+  self.container_display_list[0].visible     = False;
+  self.container_view_list[0].visible        = True;
+  self.select_text_i                         = None;# Clear old text selections
+  self.refresh_waveforms                     = True;
+  proc_main_menu_button_press( self );
+  return [];
+
+
 ###############################################################################
 # When a main menu button is pressed, we open or close control containers and
 # the console. For example, when "Signals" is pressed, we close the console
@@ -4479,7 +5189,8 @@ def cmd_pan_left( self ):
     my_win.zoom_pan_list = (zoom,pan,0 );
     if self.time_lock == True:
       for each_win in self.window_list:
-        if each_win.timezone == "rle" and each_win != my_win:
+#       if each_win.timezone == "rle" and each_win != my_win:
+        if each_win.timezone == timezone and each_win != my_win:
           each_win.zoom_pan_history += [ each_win.zoom_pan_list ];
           each_win.zoom_pan_list = (zoom,pan,0 );
 # Time Lock attempt
@@ -4524,7 +5235,8 @@ def cmd_pan_right( self ):
     my_win.zoom_pan_list = (zoom,pan,0 );
     if self.time_lock == True:
       for each_win in self.window_list:
-        if each_win.timezone == "rle" and each_win != my_win:
+#       if each_win.timezone == "rle" and each_win != my_win:
+        if each_win.timezone == timezone and each_win != my_win:
           each_win.zoom_pan_history += [ each_win.zoom_pan_list ];
           each_win.zoom_pan_list = (zoom,pan,0 );
 # Time Lock attempt
@@ -4712,6 +5424,37 @@ def cmd_scroll_down( self ):
 
 
 ########################################################
+# scroll_analog_up 
+def cmd_scroll_analog_up( self ):
+  rts = [];
+  if self.window_selected != None :
+    win_num = self.window_selected;
+    my_win  = self.window_list[win_num];
+    y_delta = self.txt_height/1;
+#   if my_win.y_analog_offset < 0:
+    if True:
+      my_win.y_analog_offset += y_delta;
+#   else:
+#     my_win.y_analog_offset = 0;
+    self.refresh_waveforms = True;
+  return rts;
+
+
+########################################################
+# scroll_analog_down
+def cmd_scroll_analog_down( self ):
+  rts = [];
+  if self.window_selected != None :
+    win_num = self.window_selected;
+    my_win  = self.window_list[win_num];
+    y_delta = self.txt_height/1;
+    if True:
+      my_win.y_analog_offset -= y_delta;
+    self.refresh_waveforms = True;
+  return rts;
+
+
+########################################################
 # Zoom In on center of screen
 def cmd_zoom_in( self ):
   rts = [];
@@ -4742,7 +5485,8 @@ def cmd_zoom_in( self ):
     my_win.zoom_pan_list = (zoom,pan,0 );
     if self.time_lock == True:
       for each_win in self.window_list:
-        if each_win.timezone == "rle" and each_win != my_win:
+#       if each_win.timezone == "rle" and each_win != my_win:
+        if each_win.timezone == timezone and each_win != my_win:
           each_win.zoom_pan_history += [ each_win.zoom_pan_list ];
           each_win.zoom_pan_list = (zoom,pan,0 );
 #   self.refresh_waveforms = True;
@@ -4762,7 +5506,7 @@ def cmd_zoom_out( self ):
     samples_shown     = my_win.samples_shown;
     samples_total     = my_win.samples_total;
     timezone         = my_win.timezone;
-    if samples_shown == None:
+    if samples_shown == None or samples_total == None:
       return rts;
 
     center_sample = samples_start_offset + int( samples_shown / 2 );
@@ -4804,7 +5548,8 @@ def cmd_zoom_out( self ):
       my_win.zoom_pan_list = (zoom,pan,0 );
       if self.time_lock == True:
         for each_win in self.window_list:
-          if each_win.timezone == "rle" and each_win != my_win:
+#         if each_win.timezone == "rle" and each_win != my_win:
+          if each_win.timezone == timezone and each_win != my_win:
             each_win.zoom_pan_history += [ each_win.zoom_pan_list ];
             each_win.zoom_pan_list = (zoom,pan,0 );
       refresh_same_timezone(self);
@@ -4840,9 +5585,11 @@ def cmd_zoom_full( self ):
     my_win           = self.window_list[win_num];
     my_win.zoom_pan_history += [ my_win.zoom_pan_list ];
     my_win.zoom_pan_list = ( 1.0,0,0 );
+    timezone         = my_win.timezone;
     if self.time_lock == True:
       for each_win in self.window_list:
-        if each_win.timezone == "rle" and each_win != my_win:
+#       if each_win.timezone == "rle" and each_win != my_win:
+        if each_win.timezone == timezone and each_win != my_win:
           each_win.zoom_pan_history += [ each_win.zoom_pan_list ];
           each_win.zoom_pan_list = (1.0,0,0 );
 
@@ -4955,7 +5702,8 @@ def cmd_zoom_to_cursors( self ):
         my_win.zoom_pan_list = (zoom,pan,0 );
         if self.time_lock == True:
           for each_win in self.window_list:
-            if each_win.timezone == "rle" and each_win != my_win:
+#           if each_win.timezone == "rle" and each_win != my_win:
+            if each_win.timezone == timezone and each_win != my_win:
               each_win.zoom_pan_history += [ each_win.zoom_pan_list ];
               each_win.zoom_pan_list = (zoom,pan,0 );
 
@@ -5048,14 +5796,16 @@ def cmd_sump_force_stop( self ):
   log( self, ["sump_force_stop()"] );
   rts = [];
   if not self.sump_connected:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
     return;
   else:
     self.sump.wr( self.sump.cmd_state_reset, 0x00000000 );
     self.sump.wr( self.sump.cmd_state_idle,  0x00000000 );
     self.sump.rd_status();
     self.mode_acquire = False;
-  self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright );
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright );
   return rts;
 
 
@@ -5072,7 +5822,9 @@ def cmd_sump_force_trig( self ):
   log( self, ["sump_force_trig()"] );
   rts = [];
   if not self.sump_connected:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
     return;
   else:
 #   log( self, ["1"] );
@@ -5172,6 +5924,7 @@ def cmd_load_uut( self, words ):
   log( self, ["cmd_load_uut()"] );
   uut_ini_file = words[1];
   (file_path,filename) = os.path.split( uut_ini_file );
+  log( self, [" file_path = %s , file_name = %s" % ( file_path, filename )] );
   self.path_to_uut = file_path;# Note this is different from var sump_path_uut
 # old_cwd = os.getcwd();
 # os.chdir( file_path );# Need to support relative path sourcing
@@ -5199,6 +5952,7 @@ def cmd_load_uut( self, words ):
 # for each in self.view_ontap_list:
 #   print("#", each );
 # print("cmd_load_uut() done");
+  self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
   return rts;
 
 
@@ -5224,9 +5978,14 @@ def cmd_save_pza( self, words ):
     filename_path = self.vars["sump_path_pza"];
     filename_base = os.path.join( filename_path, "sump3_" );
     file_out = make_unique_filename( self, filename_base, ".pza" );
+  else:
+    if ".pza" not in file_out:
+      file_out = file_out + ".pza";
+    (fp,fn) = os.path.split( file_out );
+    if fp == "":
+      filename_path = self.vars["sump_path_pza"];
+      file_out      = os.path.join( filename_path, file_out );
 
-  if ".pza" not in file_out:
-    file_out = file_out + ".pza";
   path = os.path.abspath( self.vars["sump_path_ram"] );
   ext = "txt";
   file_inc_filter = os.path.join( path, "*."+ext );
@@ -5244,7 +6003,8 @@ def cmd_save_pza( self, words ):
   rts += ["save_pza() saved %d files to %s" % ( count, file_out ) ];
   stop_time = self.pygame.time.get_ticks();
   delta_time = stop_time - start_time;
-  log( self, ["cmd_save_pza() Download Time = %d mS" % delta_time] );
+  log( self, ["cmd_save_pza() %s : Download Time = %d mS" % ( file_out, delta_time )] );
+  self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Saved %s" % file_out);
   return rts;
 
 
@@ -5255,6 +6015,9 @@ def cmd_load_pza( self, words ):
   rts = [];
   file_in = words[1];
   if os.path.exists( file_in ):
+    ( null , file_no_path ) = os.path.split( file_in );
+    self.vars["uut_name"] = file_no_path;
+    log( self, ["gunzipping %s" % file_no_path ] );
 #   pza_list = file2list( file_in );# Clear Text
     pza_list = filegz2list( file_in );# Gzipped
 
@@ -5368,23 +6131,40 @@ def log( self, txt_list ):
 # Establish connection to Sump3 hardware
 def cmd_sump_connect( self ):
   log( self, ["sump_connect()"] );
-  time_start = time.time();
   erase_old_sump_ram_files( self );
+  time_start = time.time();
+  txt = "Attempting to establish communication to hardware at %s : %d" % \
+        ( self.vars["bd_server_ip"], int( self.vars["bd_server_socket"], 10 ));
+  log( self, [ txt ] );
+
   rts = [];
 # self.bd=Backdoor(  self.vars["bd_server_ip"],
 #                    int( self.vars["bd_server_socket"], 10 ) );# Note dec
-  self.bd=Backdoor(  self.vars["bd_server_ip"],
+  self.bd=Backdoor(  self,
+                     self.vars["bd_server_ip"],
                      int( self.vars["bd_server_socket"], 10 ),
                      int( self.vars["aes_key"], 16 ),          
                      int( self.vars["aes_authentication"], 10 ) 
                   );
 
   if ( self.bd.sock == None ):
-    txt = "ERROR: Unable to connect to BD_SERVER";
+    a = self.vars["bd_server_ip"];
+    b = self.vars["bd_server_socket"];
+    txt = "cmd_sump_connect(): ERROR: Unable to connect to BD_SERVER : Socket %s : IP %s" % (b,a);
     log( self, [ txt ] );
     return rts;
 
+  thread_lock_en = int( self.vars["sump_thread_lock_en"], 10 );
+  self.thread_lock_en = thread_lock_en == 1;
+
+  rd_status_legacy_en = int( self.vars["sump_rd_status_legacy_en"], 10 );
+  self.rd_status_legacy_en = rd_status_legacy_en == 1;
+
   self.sump = sump3_hw( self, self.bd, int( self.vars["sump_uut_addr"],16 ) );
+
+  cmd_thread_pool_request_id(self);
+  cmd_thread_lock(self);
+
   self.sump.wr( self.sump.cmd_state_idle,  0x00000000 );# In case in sleep state
   self.sump.rd_status();
   ( stat_str, status ) = self.sump.status;
@@ -5397,8 +6177,9 @@ def cmd_sump_connect( self ):
 # if ( self.sump.cfg_dict['hw_id'] != 0x0ADC ):
 # if ( self.sump.cfg_dict['hw_id'] != 0x53 ):
   if found_sump3_hw == False:
-    txt = "ERROR: Unable to locate SUMP Hardware at %08x" % self.sump.addr_ctrl; 
+    txt = "cmd_sump_connect(): ERROR: Unable to locate SUMP Hardware at %08x" % self.sump.addr_ctrl; 
     log( self, [ txt ] );
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" "+txt);
     return rts;
   else:
     self.sump_connected = True;
@@ -5410,23 +6191,25 @@ def cmd_sump_connect( self ):
   # Get the entire hardware configuration 
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Reading HW Configuration...");
   self.pygame.event.pump();
-  sump_read_config(self );
+  found_sump3_hw = sump_read_config(self );
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
   self.pygame.event.pump();
 
 # rts += ["hw_id         = %04x" % self.sump.cfg_dict['hw_id']];
   rts += ["--------------------------------------------------"];
-  rts += ["hw_id         = %02x" % self.sump.cfg_dict['hw_id']];
-  rts += ["hw_rev        = %02x" % self.sump.cfg_dict['hw_rev']];
-  rts += ["view_rom_en   = %01x" % self.sump.cfg_dict['view_rom_en'  ]];
-  rts += ["ana_ls_enable = %01x" % self.sump.cfg_dict['ana_ls_enable']];
-  rts += ["dig_hs_enable = %01x" % self.sump.cfg_dict['dig_hs_enable']];
-  rts += ["rle_hub_num   = %d"   % self.sump.cfg_dict['rle_hub_num']];
-  rts += ["ana_ram_depth = %dK"  % ( self.sump.cfg_dict['ana_ram_depth'] / 1024 )];
-  rts += ["ana_ram_width = %d"   % ( self.sump.cfg_dict['ana_ram_width'] *32 )];
-  rts += ["dig_ram_depth = %dK"  % ( self.sump.cfg_dict['dig_ram_depth'] / 1024 )];
-  rts += ["dig_ram_width = %d"   % ( self.sump.cfg_dict['dig_ram_width'] *32 )];
-  rts += ["view_rom_kb   = %dKb" % ( self.sump.cfg_dict['view_rom_kb'] )];
+  rts += ["hw_id           = %02x" % self.sump.cfg_dict['hw_id']];
+  rts += ["hw_rev          = %02x" % self.sump.cfg_dict['hw_rev']];
+  rts += ["view_rom_en     = %01x" % self.sump.cfg_dict['view_rom_en'  ]];
+  rts += ["bus_busy_bit_en = %01x" % self.sump.cfg_dict['bus_busy_bit_en' ]];
+  rts += ["thread_lock_en  = %01x" % self.sump.cfg_dict['thread_lock_en' ]];
+  rts += ["ana_ls_enable   = %01x" % self.sump.cfg_dict['ana_ls_enable']];
+  rts += ["dig_hs_enable   = %01x" % self.sump.cfg_dict['dig_hs_enable']];
+  rts += ["rle_hub_num     = %d"   % self.sump.cfg_dict['rle_hub_num']];
+  rts += ["ana_ram_depth   = %dK"  % ( self.sump.cfg_dict['ana_ram_depth'] / 1024 )];
+  rts += ["ana_ram_width   = %d"   % ( self.sump.cfg_dict['ana_ram_width'] *32 )];
+  rts += ["dig_ram_depth   = %dK"  % ( self.sump.cfg_dict['dig_ram_depth'] / 1024 )];
+  rts += ["dig_ram_width   = %d"   % ( self.sump.cfg_dict['dig_ram_width'] *32 )];
+  rts += ["view_rom_kb     = %dKb" % ( self.sump.cfg_dict['view_rom_kb'] )];
 
 # New 2023.08.23
   self.vars["sump_hs_clock_freq" ] = "%f" % self.sump.cfg_dict['dig_freq'];
@@ -5490,7 +6273,7 @@ def cmd_sump_connect( self ):
       else:
         pod_name = "%d" % pod;# pod_name_en parameter was 0
 
-      for i in range(0,31):
+      for i in range(0,32):
         bit = 2**i;
         if ( ( pod_triggerable & bit ) != 0x00000000 ):
           triggerable_list += ["digital_rle[%d][%d][%d]" % ( hub,pod,i ) ];
@@ -5501,7 +6284,7 @@ def cmd_sump_connect( self ):
       else:
         pod_maskable = 0x00000000;
 #     print("pod_maskable = %08x" % pod_maskable );
-      for i in range(0,31):
+      for i in range(0,32):
         bit = 2**i;
         if ( ( pod_maskable & bit ) != 0x00000000 ):
           maskable_list += ["digital_rle[%d][%d][%d]" % ( hub,pod,i ) ];
@@ -5626,6 +6409,7 @@ def cmd_sump_connect( self ):
   list2file( file_name, rts );
   self.triggerable_list = triggerable_list;
   self.maskable_list    = maskable_list;
+  cmd_thread_unlock(self);
   return rts;
 
 
@@ -5740,7 +6524,9 @@ def cmd_sump_acquire( self ):
     self.mode_acquire = True;
     cmd_sump_arm(self);
   else:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
   return;
 
 
@@ -5751,7 +6537,9 @@ def cmd_sump_idle( self ):
   if self.sump_connected:
     self.sump.wr( self.sump.cmd_state_idle, 0x00000000 );
   else:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
   return;
 
 
@@ -5762,7 +6550,9 @@ def cmd_sump_reset( self ):
   if self.sump_connected:
     self.sump.wr( self.sump.cmd_state_reset, 0x00000000 );
   else:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
   return;
 
 ########################################################
@@ -5772,7 +6562,9 @@ def cmd_sump_sleep( self ):
   if self.sump_connected:
     self.sump.wr( self.sump.cmd_state_sleep, 0x00000000 );
   else:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
   return;
 
 ########################################################
@@ -5781,9 +6573,12 @@ def cmd_sump_user_read( self, words ):
   log( self, ["sump_user_read()"] );
   addr = int(words[1],16);
   if not self.sump_connected:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
     return;
 
+  cmd_thread_lock(self);
   self.sump.wr( self.sump.cmd_wr_rle_hub_user_addr, addr );
   # Only one RLE Hub should have non-zero data
   data = 0x00000000;
@@ -5795,6 +6590,7 @@ def cmd_sump_user_read( self, words ):
     if hub_data != 0x00000000:
       data = hub_data;
   txt_rts = [ "%08x" % data ];
+  cmd_thread_unlock(self);
   return txt_rts;
   
 
@@ -5803,30 +6599,175 @@ def cmd_sump_user_read( self, words ):
 def cmd_sump_user_write( self, words ):
   log( self, ["sump_user_write()"] );
   if not self.sump_connected:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
     return;
+
+  cmd_thread_lock(self);
   addr = int(words[1],16);
   data_list = [ int( each,16) for each in filter(None,words[2:]) ];
   for each in data_list:
     self.sump.wr( self.sump.cmd_wr_rle_hub_user_addr, addr );
     self.sump.wr( self.sump.cmd_wr_rle_hub_user_wr_d, each );
     addr += 4;
+  cmd_thread_unlock(self);
   return;
 
+
+########################################################
+# Up to 32 software threads may access Sump3 hardware 
+# Thread IDs are either statically or dynamically 
+# assigned. If sump_thread_id in ini file is 00000000
+# then assignment is dynamic. This function will 
+# contact the hardware and find out what thread IDs are
+# already taken (1) and grab lowest ID that is free (0)
+# and set that bit from 0->1 which requests that ID.
+#
+# WARNING : Reading cmd_wr_thread_pool sets a JK that
+# will then report all threads are taken until a Write
+# to cmd_wr_thread_pool. This prevents a 2nd software
+# process from getting the same thread ID. Trust me.
+def cmd_thread_pool_request_id( self ):
+  thread_lock_en = int( self.vars["sump_thread_lock_en"], 10 );
+  thread_id      = int( self.vars["sump_thread_id"], 16 );
+
+  # loop until no other thread is using the hardware and bus_busy_timer isn't busy
+  if thread_lock_en == 1:
+    busy_bit = 1;
+    lock_bit = 1;
+    # Loop until the HW is free and remember the ctrl_status of Sump HW going in
+    while busy_bit == 1 or lock_bit == 1:
+      ctrl_status = self.sump.rd_ctrl();
+      busy_bit = ( ctrl_status & 0x80000000 ) >> 31;
+      lock_bit = ( ctrl_status & 0x40000000 ) >> 30;
+      log( self, ["cmd_thread_pool_request_id() ctrl_status == %08x" % ctrl_status ] );
+      pygame.time.wait( 100 );# time in mS. 
+
+    # If we already have a thread_id, surrender it now.
+    if self.thread_id != None:
+      self.sump.wr( self.sump.cmd_wr_thread_pool_clear, self.thread_id );
+      log( self, ["cmd_thread_pool_request_id() : Surrendering thread_id  %08x" % self.thread_id ] );
+
+    # Locate a free ID from the pool of IDs, unless there is a static assigned one
+    free_thread_id = False; 
+    if thread_id == 0x00000000:
+      while free_thread_id == False:
+        # Request a list of all in use thread_id's
+        in_use_thread_id = self.sump.rd( self.sump.cmd_wr_thread_pool_set )[0];
+        log( self, ["cmd_thread_pool_request_id() : thread_id in use %08x" % in_use_thread_id ] );
+        if in_use_thread_id != 0xFFFFFFFF:
+          for i in range(0,32):
+            bit = 2**i;# 1,2,4,8, etc
+            # Find the lowest free thread_id
+#           print("%08x %08x" % ( bit, in_use_thread_id ) );
+            if ( in_use_thread_id & bit ) == 0x00000000:
+              free_thread_id = bit;
+              break;
+        else:
+          log( self, ["cmd_thread_pool_request_id() : ERROR zero thread_id available!!"]);
+          pygame.time.wait( 100 );# time in mS. 
+    else:
+      free_thread_id = thread_id;# Use the static assigned thread ID
+
+    # Reserve the ID for this application
+    if free_thread_id != False:
+      self.sump.wr( self.sump.cmd_wr_thread_pool_set, free_thread_id );
+      log( self, ["cmd_thread_pool_request_id() : Acquired thread_id  %08x" % free_thread_id ] );
+      self.thread_id = free_thread_id;
+
+    self.sump.wr_ctrl( ctrl_status );# Put that Sump3 HW ctrl state back
+  return;
+
+
+def cmd_thread_pool_surrender_id( self ):
+  thread_lock_en = int( self.vars["sump_thread_lock_en"], 10 );
+
+  # loop until no other thread is using the hardware and bus_busy_timer isn't busy
+  if thread_lock_en == 1:
+    busy_bit = 1;
+    lock_bit = 1;
+    # Loop until the HW is free and remember the ctrl_status of Sump HW going in
+    while busy_bit == 1 or lock_bit == 1:
+      ctrl_status = self.sump.rd_ctrl();
+      busy_bit = ( ctrl_status & 0x80000000 ) >> 31;
+      lock_bit = ( ctrl_status & 0x40000000 ) >> 30;
+      log( self, ["cmd_thread_pool_surrender_id() ctrl_status == %08x" % ctrl_status ] );
+      pygame.time.wait( 100 );# time in mS. 
+
+    if self.thread_id != None:
+      self.sump.wr( self.sump.cmd_wr_thread_pool_clear, self.thread_id );
+      log( self, ["cmd_thread_pool_request_id() : Surrendering thread_id  %08x" % self.thread_id ] );
+
+    self.sump.wr_ctrl( ctrl_status );# Put that Sump3 HW ctrl state back
+  return;
+
+########################################################
+# Up to 32 software threads may access Sump3 hardware
+# using a shared thread locking register in sump3_core.v
+def cmd_thread_lock( self ):
+# return;
+  thread_lock_en = int( self.vars["sump_thread_lock_en"], 10 );
+  if thread_lock_en == 1 and self.thread_id != None:
+#   thread_id = int( self.vars["sump_thread_id"], 16 );
+    thread_id = self.thread_id;
+    ctrl_status = self.sump.rd_ctrl();# Remember the ctrl state of Sump3 HW
+
+    # Clear our own Thread ID in case we crashed
+    self.sump.wr( self.sump.cmd_wr_thread_lock_clear, thread_id );
+
+    # Now loop until no other thread is using the hardware
+    got_lock = False;
+    while got_lock == False:
+      thread_lock_status = self.sump.rd( self.sump.cmd_wr_thread_lock_set )[0];
+      if thread_lock_status != 0x00000000:
+        log( self, ["cmd_thread_lock() : %08x" % thread_lock_status ] );
+        pygame.time.wait( 100 );# time in mS. 
+      else:
+        self.sump.wr( self.sump.cmd_wr_thread_lock_set, thread_id );
+        thread_lock_status = self.sump.rd( self.sump.cmd_wr_thread_lock_set )[0];
+        if thread_lock_status == thread_id:  
+          got_lock = True;
+        else:
+          self.sump.wr( self.sump.cmd_wr_thread_lock_clear, thread_id );
+          a = self.sump.rd( self.sump.cmd_wr_thread_lock_set )[0];
+          log( self, ["cmd_thread_lock() : %08x %08x" % ( thread_lock_status, a ) ] );
+    self.sump.wr_ctrl( ctrl_status );# Put that Sump3 HW ctrl state back
+    log( self, ["cmd_thread_lock() : Locked to sump_thread_id %08x" % ( thread_lock_status ) ] );
+  return;
+
+def cmd_thread_unlock( self ):
+# return;
+  thread_lock_en = int( self.vars["sump_thread_lock_en"], 10 );
+  if thread_lock_en == 1 and self.thread_id != None:
+    ctrl_status = self.sump.rd_ctrl();# Remember the ctrl state of Sump3 HW
+    self.sump.wr( self.sump.cmd_wr_thread_lock_clear, self.thread_id );
+    self.sump.wr_ctrl( ctrl_status );# Put that Sump3 HW ctrl state back
+    log( self, ["cmd_thread_unlock()"] );
+  return;
 
 ########################################################
 # Arm the sump engine to acquire data with specified trigger
 def cmd_sump_arm( self ):
   log( self, ["sump_arm()"] );
   if not self.sump_connected:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
     return;
+
+  cmd_thread_lock(self);
 
   hub_pod_user_ctrl_dword_hash = generate_pod_user_ctrl_list( self );
 # sort_pod_user_ctrl_list( self );
 
   # Get the hardware configuration 
-  sump_read_config(self );
+  found_sump3_hw = sump_read_config(self );
+  if not found_sump3_hw:
+    txt = "cmd_sump_arm(): ERROR: Sump3 HW Communication";
+    log( self, [ txt ] );
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" "+txt);
+    return;
 
   # Support changing sump hard on the fly.
   sump_uut_addr = int( self.vars["sump_uut_addr"   ],16 );
@@ -5924,6 +6865,8 @@ def cmd_sump_arm( self ):
     for each_sig in self.signal_list:
 #     print( each_sig.name );
       if each_sig.trigger and each_sig.units_per_code != None:
+        # 2025.01.20
+        trig_ana_lvl -= each_sig.offset_units;
         ch = decode_adc_ch_number( each_sig );
         trig_ana_field = ( ch << 24 ) + ( 0x00FFFFFF & int( trig_ana_lvl / each_sig.units_per_code ));
 #       print("Oy %s is your trigger of source %s %d" % ( each_sig.name, each_sig.source, ch ) );
@@ -6015,7 +6958,8 @@ def cmd_sump_arm( self ):
   self.sump.rd_status();
   ( stat_str, status ) = self.sump.status;
   print( stat_str );
-
+  self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" HW Status: "+stat_str);
+  cmd_thread_unlock(self);
   return;
 
 #  Decode the analog ch number from the source attribute
@@ -6112,29 +7056,36 @@ def proc_rle_mask( self, rle_hub_pod_list ):
   return rle_mask_hash;
 
 
+
 ########################################################
 # given the selected signals, create the 32bit sump trigger field
-def cmd_sump_set_trigs( self ):
-  log( self, ["sump_set_trigs()"] );
+def cmd_sump_set_trigs( self, words ):
   rts = [];
-# for each_sig in self.signal_list:
-#   if each_sig.trigger:
-#     each_sig.trigger = False;
+  trig_names = "";
 
-  # Assign the trigger attribute if the selected signal is triggerable
   for each_sig in self.signal_list:
-    if each_sig.selected:
+#   print("1: " + each_sig.name );
+    if ( each_sig.name == words[1] or words[1] == "*" or each_sig.selected ):
+#     print("2: " + each_sig.name );
+      # If the selected signal is analog, clear all existing triggers
+      # since there is only a single analog comparator trigger
+      if "analog" in each_sig.source:
+        cmd_sump_clear_trigs(self,["",""]);
+
+      # Assign the trigger attribute if the selected signal is triggerable
       if each_sig.triggerable:
         if not each_sig.trigger:
           each_sig.trigger = True;
           each_sig.selected = False;# Deselect so it will turn red
         else:
-          each_sig.trigger = False;
+          each_sig.trigger = False; # Toggle off if already trigger
           each_sig.selected = False;# Deselect so it will turn green
       else:
         rts +=["ERROR: %s is not triggerable" % each_sig.name];
+      trig_names += each_sig.name + " ";
+  log( self, ["sump_set_trigs( %s )" % trig_names ] );
 
-  # Iterate looking for plain digital triggers
+  # Iterate looking for plain LS digital triggers
   trig_field = 0x00000000;
   for each_sig in self.signal_list:
     if each_sig.trigger and "digital_rle" not in each_sig.source:
@@ -6168,9 +7119,10 @@ def cmd_sump_set_trigs( self ):
 
 ########################################################
 # clear all triggers
-def cmd_sump_clr_trigs( self ):
-  log( self, ["sump_clr_trigs()"] );
-# print("Oy");
+#def cmd_sump_clr_trigs( self, words ):
+def cmd_sump_clear_trigs( self, words ):
+# log( self, ["sump_clr_trigs()"] );
+  log( self, ["sump_clear_trigs()"] );
   rts = [];
   trig_field = 0x00000000;
   for each_sig in self.signal_list:
@@ -6195,10 +7147,13 @@ def cmd_sump_query( self ):
   log( self, ["sump_query()"] );
   rts = [];
   if not self.sump_connected:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
   else:
-    self.sump.rd_status();
+    self.sump.rd_status();# Old status required ctrl in arm state
     ( stat_str, status ) = self.sump.status;
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" HW Status: "+stat_str);
     rts = [stat_str];
   return rts;
 
@@ -6211,9 +7166,12 @@ def cmd_sump_download( self ):
   self.pygame.event.pump();
   start_time = self.pygame.time.get_ticks();
   if not self.sump_connected:
-    log( self, ["ERROR-1977: Sump HW not connected"] );
+    txt = "ERROR-1977: Sump HW not connected";
+    log( self, [ txt ]);
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright + " "+txt );
     return;
   else:
+    cmd_thread_lock(self);
     self.sump.rd_status();
     ( stat_str, status ) = self.sump.status;
 #   while( stat_str != "acquired" ):
@@ -6225,7 +7183,13 @@ def cmd_sump_download( self ):
     self.status_downloading = True;
 
     # Get the hardware configuration that captured the data
-    sump_read_config(self );
+    found_sump3_hw = sump_read_config(self );
+    if not found_sump3_hw:
+      txt = "cmd_sump_download(): ERROR: Sump3 HW Communication";
+      self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" "+txt);
+      log( self, [ txt ] );
+      return;
+
     capture_cfg_list = [];
     for key in self.sump.cfg_dict:
       value = self.sump.cfg_dict[key];
@@ -6354,6 +7318,7 @@ def cmd_sump_download( self ):
   stop_time = self.pygame.time.get_ticks();
   delta_time = stop_time - start_time;
   log( self, ["sump_download() : Completed in %d mS.\n" % delta_time] );
+  cmd_thread_unlock(self);
   return;
 
 # create_drawing_lines() will check to see if a signal has no values
@@ -6630,9 +7595,14 @@ def sump_read_config( self ):
   a['hw_id']                 = ( hwid_data & 0xFF000000 ) >> 24;
   a['hw_rev']                = ( hwid_data & 0x00FF0000 ) >> 16;
   a['rle_hub_num']           = ( hwid_data & 0x0000FF00 ) >> 8;
+  a['bus_busy_bit_en']       = ( hwid_data & 0x00000010 ) >> 4;
+  a['thread_lock_en']        = ( hwid_data & 0x00000008 ) >> 3;
   a['view_rom_en']           = ( hwid_data & 0x00000004 ) >> 2;
   a['ana_ls_enable']         = ( hwid_data & 0x00000002 ) >> 1;
   a['dig_hs_enable']         = ( hwid_data & 0x00000001 ) >> 0;
+
+  if a['hw_id'] != self.sump.hw_id:
+    return False;
 
 # HACK
 # a['ana_ls_enable']         = 0;
@@ -6687,7 +7657,7 @@ def sump_read_config( self ):
   a['trig_nth']              =  trig_nth;
   a['trig_src_core']         =  trig_src_core;
 
-  return;
+  return True;
 
 ########################################################
 # Download one of three RAM types to a file       
@@ -7472,8 +8442,14 @@ def create_sump_digital_slow( self, file_in, file_out ):
   try:
     t = code_list.index("1");
   except:
-    t = 0;
-    log(self,["WARNING: no pre-trig LS samples found!"]);
+#   t = 0;
+# New 2025.01.22
+    try:
+      t = code_list.index("2");
+      log(self,["WARNING: no pre-trig LS samples found!"]);
+    except:
+      t = 0;
+      log(self,["WARNING: no trigger LS samples found!"]);
 
   digital_list = digital_list[t:(t+dig_len)];
   code_list    = code_list[t:(t+dig_len)];
@@ -7653,12 +8629,13 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
           else:
             rle_valid_user_ctrl = False;
 
-
       # Future designs may support both analog_ls and analog_hs
       if sig_source[0:9] == "analog_ls" and len(sample_list) != 0:
         words = " ".join(sample_list[0].split()).split(' ');
         words = words[1:];# Remove the digital samples that were word[0]
         total_words = len( words );
+        adc_random_none_samples = int( self.vars["dbg_random_adc_none_samples"],10 );
+        ls_ana_dig_alignment    = int( self.vars["sump_ls_ana_dig_alignment"],10 );
         for i in range( 0, total_words ):
           source = "analog_ls[%d]" % i;
           if sig_source == source:
@@ -7666,7 +8643,15 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
             each_sig.type = "analog";
             each_sig.format = "analog";
 #           each_sig.triggerable = False;# TODO Must check for events
-            for each_sample in sample_list:
+            # 2025.03.18 align analog_ls with digital_ls by pre-stuffing 2 Nones
+#           each_sig.values += 2*[ None ];
+#           each_sig.values += 4*[ None ];
+            each_sig.values += ls_ana_dig_alignment*[ None ];
+
+#           2025.04.15 : Since we prepended 2 Nones, shorten analog list by 2 samples
+#           for each_sample in sample_list:
+#           for each_sample in sample_list[0:-4]:
+            for each_sample in sample_list[0:-ls_ana_dig_alignment]:
               words = " ".join(each_sample.split()).split(' ');
               words = words[1:];# Remove the digital samples that were word[0]
               word_val = words[i];
@@ -7674,7 +8659,13 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
                 word_val_int = None;
               else:
                 word_val_int = int(word_val,16);
+              # This is for software testing of not having an ADC sample
+              if adc_random_none_samples == 1:
+                rnd = random.randint(0,10);
+                if rnd == 0:
+                  word_val_int = None;
               each_sig.values += [ word_val_int ];
+
 
       # Check for digital bit ripped of multiple bits
       elif ":" in sig_source and sig_source[0:8] == "digital_":
@@ -7782,7 +8773,9 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
         each_sig.trigger_index = ( ram_depth - self.sump.cfg_dict['dig_post_trig_samples'] );
         each_sig.trigger_index -= hs_hw_pipeline_offset;
 #     else:
-      elif "analog_ls" in sig_source:
+# 2025.01.13
+#     elif "analog_ls" in sig_source:
+      elif "analog_ls" in sig_source or "digital_ls" in sig_source:
         ana_rec_profile = self.sump.cfg_dict['ana_record_profile'];
         record_len      = ( ana_rec_profile & 0xFF000000 ) >> 24;
         if record_len != 0:
@@ -7799,7 +8792,9 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
       if "digital_hs" in sig_source:
         clock_period = 1000.0 * ( 1 / self.sump.cfg_dict['dig_freq'] );# ns
 #     else:
-      elif "analog_ls" in sig_source:
+# 2025.01.13
+#     elif "analog_ls" in sig_source:
+      elif "analog_ls" in sig_source or "digital_ls" in sig_source:
         try:
           clock_period = 1000.0 * ( 1 / self.sump.cfg_dict['tick_freq'] );# ns
           clock_period *= float( self.sump.cfg_dict['tick_divisor'] );# ns
@@ -7934,6 +8929,7 @@ class window(object):
     self.surface         = None;
     self.image           = None;
     self.y_offset        = 0;# Vertical offset for samples to be drawn at
+    self.y_analog_offset = 0;# Vertical offset for samples to be drawn at
     self.zoom_pan_list   = ( 1.0,0,0 );
     self.zoom_pan_history = [];
     self.rle_time_range  = None;# ( float, units, float, units )
@@ -8025,6 +9021,10 @@ class sump_virtual:
     return;
   def wr ( self, cmd, data ):
     return;
+  def rd_ctrl( self ):
+    return 0;
+  def wr_ctrl( self, data ):
+    return;
 # def rd_status( self ):
 #   self.cfg_dict['hw_id']       = ( hwid_data & 0xFFFF0000 ) >> 16;
   def close ( self ):
@@ -8067,6 +9067,11 @@ class sump3_hw:
     self.cmd_rd_trigger_src          = 0x14;
     self.cmd_rd_view_rom_kb          = 0x15;
 #   self.cmd_rd_user_stat            = 0x16;
+
+    self.cmd_wr_thread_lock_set      = 0x1c;
+    self.cmd_wr_thread_lock_clear    = 0x1d;
+    self.cmd_wr_thread_pool_set      = 0x1e;
+    self.cmd_wr_thread_pool_clear    = 0x1f;
 
     self.cmd_wr_user_ctrl            = 0x20;
     self.cmd_wr_record_config        = 0x21;
@@ -8162,6 +9167,11 @@ class sump3_hw:
     self.status_triggered            = 0x04;# Engine has triggered                  
     self.status_acquired             = 0x08;# Engine has post-trig filled        
 
+  def rd_ctrl( self ):
+    return self.bd.rd( self.addr_ctrl )[0];
+
+  def wr_ctrl ( self, cmd ):
+    self.bd.wr( self.addr_ctrl, [ cmd  ] );
 
   def wr ( self, cmd, data ):
 #   print("%08x %08x" % ( cmd, data ) );
@@ -8222,12 +9232,14 @@ class sump3_hw:
   def rd_cfg( self ):
     hwid_data     = self.rd( self.cmd_rd_hw_id_rev     )[0];
 
-    self.cfg_dict['hw_id']         = ( hwid_data & 0xFF000000 ) >> 24;
-    self.cfg_dict['hw_rev']        = ( hwid_data & 0x00FF0000 ) >> 16;
-    self.cfg_dict['rle_hub_num']   = ( hwid_data & 0x0000FF00 ) >> 8;
-    self.cfg_dict['view_rom_en']   = ( hwid_data & 0x00000004 ) >> 2;
-    self.cfg_dict['ana_ls_enable'] = ( hwid_data & 0x00000002 ) >> 1;
-    self.cfg_dict['dig_hs_enable'] = ( hwid_data & 0x00000001 ) >> 0;
+    self.cfg_dict['hw_id']           = ( hwid_data & 0xFF000000 ) >> 24;
+    self.cfg_dict['hw_rev']          = ( hwid_data & 0x00FF0000 ) >> 16;
+    self.cfg_dict['rle_hub_num']     = ( hwid_data & 0x0000FF00 ) >> 8;
+    self.cfg_dict['bus_busy_bit_en'] = ( hwid_data & 0x00000010 ) >> 4;
+    self.cfg_dict['thread_lock_en']  = ( hwid_data & 0x00000008 ) >> 3;
+    self.cfg_dict['view_rom_en']     = ( hwid_data & 0x00000004 ) >> 2;
+    self.cfg_dict['ana_ls_enable']   = ( hwid_data & 0x00000002 ) >> 1;
+    self.cfg_dict['dig_hs_enable']   = ( hwid_data & 0x00000001 ) >> 0;
 
     # If we can't read the hw_id then we have nothing. Hard stop.
     if self.cfg_dict['hw_id'] != self.hw_id :
@@ -8259,7 +9271,8 @@ class sump3_hw:
       self.view_rom_list += self.parse_view_rom( rom_byte_list=rom_byte_list, hub=0, pod=0, inst=0 );
 
     rle_hub_cnt   = self.rd( self.cmd_rd_rle_hub_config)[0];
-    print("RLE Hub Count is %d" % rle_hub_cnt );
+#   print("RLE Hub Count is %d" % rle_hub_cnt );
+    log( self.parent , ["RLE Hub Count is %d" % rle_hub_cnt] );
     hub_list = [];
     for i in range(0,rle_hub_cnt):
       self.wr( self.cmd_wr_rle_pod_inst_addr, (i << 16) );
@@ -8286,7 +9299,8 @@ class sump3_hw:
       else:
         name = "%s"    % (             hub_name);
 
-      print("  RLE Hub %d %s has %d Pods" % ( i, name, rle_pod_cnt ) );
+#     print("  RLE Hub %d %s has %d Pods" % ( i, name, rle_pod_cnt ) );
+      log( self.parent , [ "  RLE Hub %d %s has %d Pods" % ( i, name, rle_pod_cnt ) ] );
 
       pod_list = [];
       for j in range(0,rle_pod_cnt):
@@ -8315,13 +9329,13 @@ class sump3_hw:
           name = "%s"    % (             pod_name);
         pod_list += [ hub_full_name+"."+pod_full_name ];
 
-        print("    RLE Hub %d, Pod #%d %s : HW Rev = %02x" % (i,j, name, ((pod_hw_cfg & 0xFF000000)>>24)));
+#       print("    RLE Hub %d, Pod #%d %s : HW Rev = %02x" % (i,j, name, ((pod_hw_cfg & 0xFF000000)>>24)));
+        log( self.parent , [ "    RLE Hub %d, Pod #%d %s : HW Rev = %02x" % (i,j, name, ((pod_hw_cfg & 0xFF000000)>>24))  ] );
         # If this pod has a view rom, process it
         if ( pod_hw_cfg & 0x00000002 ) != 0:
           pod_view_rom_kb = self.rd_pod( hub=i,pod=j,reg=self.rle_pod_addr_pod_view_rom_kb )[0];
           rom_byte_list = self.rd_pod_view_rom( hub=i,pod=j,size_kb=pod_view_rom_kb );
           self.view_rom_list += self.parse_view_rom( rom_byte_list=rom_byte_list, hub=i, pod=j, inst=pod_instance );
-#HERE72
 
         # Generate a fake view rom with no signal names in case there is no rom at all
         # Use the embedded hub+pod names for signal name
@@ -8463,7 +9477,6 @@ class sump3_hw:
 #         print("group_cnt = %d" % group_cnt );
 
         if ( top_type in each and top_type != "" and group_cnt == 0 ):
-#         print("Oy! %s" % each )
           parsing_jk = False;
           # Iterate the view and look for:
           # create_signal u1_pod_e[0] -source ck100_hub.u1_pod.*[0]
@@ -8508,7 +9521,8 @@ class sump3_hw:
   # It's possible for a design to have a view rom, but also have some pods that
   # aren't specified in that view rom. Search for these pods and merge
   def merge_view_rom_no_view_rom( self ):
-    print("merge_view_rom_no_view_rom()");
+    log( self.parent , ["merge_view_rom_no_view()"] );
+#   print("merge_view_rom_no_view_rom()");
     no_view_list = [];
     for each in self.no_view_rom_list:
       words = each.strip().split() + [None] * 4;# Avoid IndexError
@@ -8517,12 +9531,15 @@ class sump3_hw:
     for each_view in no_view_list:
       found = False;
       for each in self.view_rom_list:
+#       print("%s : %s" % ( each_view, each ) );
         words = each.strip().split() + [None] * 4;# Avoid IndexError
-        if words[0] == "create_signal" and words[2] == "-source":
+#       if words[0] == "create_signal" and words[2] == "-source":
+        if words[2] == "-source":
           if each_view in words[3]:
             found = True; break;
       if not found:
-        print("appending synthetic view for %s" % each_view);
+#       print("appending synthetic view for %s" % each_view);
+        log( self.parent , ["appending synthetic view for %s" % each_view] );
         parse_jk = False;
         for each in self.no_view_rom_list:
           words = each.strip().split() + [None] * 4;# Avoid IndexError
@@ -8558,7 +9575,7 @@ class sump3_hw:
   # start is not possible since that value could be a binary bit index for a signal.
   def rd_core_view_rom(self):
     rts = [];
-    print("Core View ROM Contents");
+#   print("Core View ROM Contents");
     data_list = [];
     view_rom_kb = self.rd( self.cmd_rd_view_rom_kb )[0];
     rom_length = int( view_rom_kb*1024/32 );
@@ -8611,7 +9628,8 @@ class sump3_hw:
         rom_dword_cnt = len(data_list);
         a = 100 * float( rom_dword_cnt / rom_length );
         b = rom_length * 32 / 1024;
-        print("ROM Size is %02.0f%% full of %d Kbits" % ( a, b) );
+#       print("ROM Size is %02.0f%% full of %d Kbits" % ( a, b) );
+        log( self.parent , [ "ROM Size is %02.0f%% full of %d Kbits" % ( a, b) ] );
 
         for each_dword in data_list:
           byte_list = self.dword2bytes( each_dword );
@@ -8867,9 +9885,18 @@ class sump3_hw:
     rts += [( dword & 0xFF000000 ) >> 24];
     return rts;
 
-
   def rd_status( self ):
-    status = self.rd( None )[0];
+    # New status method doesn't care what the ctrl reg is set to.
+    # The status bits show up on a read at the very top 8 bits.
+    # This is better than old method that was reading status from data_reg
+    # but required ctrl_reg to be set to armed or idle.
+    # New method supports multiple software threads.
+    if not self.parent.rd_status_legacy_en:
+      status = self.bd.rd( self.addr_ctrl )[0];
+      status = ( 0x1F000000 & status ) >> 24;
+    else:
+      status = self.rd( None )[0];
+      status = status & 0x000000FF;
     if ( status == 0x00 ):
       str = "idle";
     elif ( ( status & self.status_acquired  ) != 0x00 ):
@@ -8893,9 +9920,10 @@ class sump3_hw:
 ##############################################################################
 # functions to send Backdoor commands to BD_SERVER.PY over TCP Sockets
 class Backdoor:
-  def __init__ ( self, ip, port, aes_key, aes_authentication ):
+  def __init__ ( self, parent, ip, port, aes_key, aes_authentication ):
     self.aes     = None;
     self.aes_e2e = False;
+    self.parent  = parent;
     try:
       import socket;
     except:
@@ -8925,31 +9953,39 @@ class Backdoor:
             if "Greetings," in greetings:
               print( greetings );
               if "e2e" in greetings:
-                print("AES-256 End-2-End Encryption is required by bd_server.py.");
+#               print("AES-256 End-2-End Encryption is required by bd_server.py.");
+                log( self.parent , [ "AES-256 End-2-End Encryption is required by bd_server.py." ] );
                 self.aes_e2e = True;
               else:
                 self.aes_e2e = False;
             else:
-              print("ERROR: Authentication failed with %s" % greetings );
+#             print("ERROR: Authentication failed with %s" % greetings );
+              log( self.parent , [ "ERROR: Authentication failed with %s" % greetings ] );
               self.sock = None;
           else:
-            print("ERROR: %s was not a challenge" % words[0] );
+#           print("ERROR: %s was not a challenge" % words[0] );
+            log( self.parent , [ "ERROR: %s was not a challenge" % words[0] ] );
             self.sock = None;
         except:
-          print("ERROR: Unknown AES Install Failure. Missing aes.py perhaps?" );
+#         print("ERROR: Unknown AES Install Failure. Missing aes.py perhaps?" );
+          log( self.parent , [ "ERROR: Unknown AES Failure. Missing aes.py perhaps or invalid authentication key?" ] );
           self.sock = None;
       else:
-        print("AES Authentication not required.");
+#       print("AES Authentication not required.");
+        log( self.parent , [ "AES Authentication not required." ] );
     except:
-      print("ERROR: Unable to open Socket %d on %s" % ( port, ip ) );
+#     print("ERROR: Unable to open Socket %d on %s" % ( port, ip ) );
+      log( self.parent , [ "ERROR: Unable to open Socket %d on %s" % ( port, ip ) ] );
       self.sock = None;
       try:
         (ip_name, ip_null, ip_num ) = socket.gethostbyaddr( ip );
-        print("ERROR: Computer %s at %s located but connection to Port %d refused!!" % \
-               ( ip_name, ip_num,port ) );
-        print("Either bd_server.py has not been started or a firewall is blocking the port.");
+#       print("ERROR: Computer %s at %s located but connection to Port %d refused!!" % ( ip_name, ip_num,port ) );
+#       print("Either bd_server.py has not been started or a firewall is blocking the port.");
+        log( self.parent , [ "ERROR: Computer %s at %s located but connection to Port %d refused!!" % ( ip_name, ip_num,port ) ] );
+        log( self.parent , [ "Either bd_server.py has not been started or a firewall is blocking the port." ] );
       except:
-        print("ERROR: Server at %s not found!" % ( ip ) );
+#       print("ERROR: Server at %s not found!" % ( ip ) );
+        log( self.parent , [ "ERROR: Server at %s not found!" % ( ip ) ] );
       return;
   def close ( self ):
     self.sock.close();
@@ -8974,6 +10010,12 @@ class Backdoor:
                        ["\n"] );
     self.tx_tcp_packet( payload );
     self.rx_tcp_packet();
+
+  def quit(self):
+    cmd = "q";
+    payload = cmd+"\n";
+    self.tx_tcp_packet( payload );
+#   self.rx_tcp_packet();
 
   def rd( self, addr, num_dwords=1, repeat = False ):
     if ( repeat == False ):
@@ -9048,17 +10090,22 @@ def init_globals( self ):
   self.view_ontap_list = [];# List of all the views that are defined in files under sump_views
   self.sump_connected = False;
   self.mode_acquire = False;
+  self.thread_id = None;
+  self.thread_id_en = False;
+# self.screen_shot = False;
   self.file_dialog = None;# "load_pizza", "save_pizza", "source_script", "load_uut"
   self.tool_tip_obj = None;# object_id of hovered button
   self.tool_top_tick_time = None;# PyGame tick_time in mS that hover event happened
   self.path_to_uut = None;# Note, this is selected UUTs file path, not the env var sump_path_uut
   self.signal_list = [];
+  self.measurement_list = [];
   self.triggerable_list = [];
   self.maskable_list = [];
   self.user_ctrl_assigned_list = [];
   self.last_scroll_wheel_tick = 0;
   self.has_focus = True;
   self.toggle = False;
+  self.sump_remote_in_use = False;
   self.window_selected = None;# 0,1 or 2. When mouse is clicked and border goes yellow
   self.display_button_list = [];# Fixes a bug with resize vs init
   self.color_white = pygame.Color(0xFF,0xFF,0xFF);
@@ -9113,6 +10160,7 @@ def init_globals( self ):
   self.mouse_signal_drag_to_window = None;
   self.sump = None;
   self.text_stats = None;
+  self.text_stats_tick_time = 0;
   self.status_downloading = False;
 # self.rom_signal_source = None;
   self.signal_delete_list = [];# Stack of signals deleted for <DEL>,<INS>,<HOME>
@@ -9158,8 +10206,10 @@ def init_vars( self, file_ini ):
   vars["font_size"] = "16";
   vars["font_size_toolbar"] = "16";
   vars["file_log"]  = "sump3_log.txt";
-  vars["debug_mode"                ] = "False";
+  vars["debug_mode"                ] = "0";
+  vars["dbg_random_adc_none_samples"] = "0";    
   vars["tool_tips_on_hover"        ] = "0";
+  vars["tool_tips_text_stats_en"   ] = "1";
   vars["screen_color_background"   ] = "000000";
   vars["screen_color_foreground"   ] = "00FF00";
   vars["screen_color_selected"     ] = "FFFF00";
@@ -9172,22 +10222,38 @@ def init_vars( self, file_ini ):
 # vars["screen_width"              ] = "800";
 # vars["screen_height"             ] = "600";
 # vars["screen_height_small"       ] = "600";
-  vars["screen_width"              ] = "1024";
+# vars["screen_width"              ] = "1024";
+# vars["screen_height"             ] = "720";
+  vars["screen_width"              ] = "1280";
   vars["screen_height"             ] = "720";
   vars["screen_height_small"       ] = "600";
 # vars["screen_windows"            ] = "F";# 4 bits for which windows are visible
   vars["screen_windows"            ] = "9";# 4 bits for visible windows. 9 = Win1 + bd_shell
   vars["screen_window_rle_time"    ] = "1";# Draw RLE Time range in upper right of windows  
   vars["screen_console_height"     ] = "300";# bd_shell console height
+  vars["screen_save_image_format"  ] = "png";# png jpg bmp 
+  vars["screen_measurements_tall"  ] = "0";# Wide versus Tall cursor measurements           
+  vars["screen_adc_sample_points"  ] = "0";# 1 displays dot at each sample point            
+  vars["screen_analog_line_width"  ] = "2";# 
+  vars["screen_analog_bold_width"  ] = "4";# 
+  vars["screen_max_text_stats_width"] = "25";
+  vars["sump_remote_file_en"       ] = "1";
+  vars["sump_remote_telnet_en"     ] = "0";
+  vars["sump_remote_telnet_port"   ] = "23";
+  vars["sump_remote_telnet_host"   ] = "127.0.0.1";# vs *.*.*.* or ""
   vars["bd_connection"             ] = "tcp";
   vars["bd_protocol"               ] = "poke";
   vars["bd_server_ip"              ] = "localhost";
   vars["bd_server_socket"          ] = "21567";
+  vars["bd_server_quit_on_close"   ] = "1";
   vars["aes_key"                   ] = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
   vars["aes_authentication"        ] = "0";
   vars["uut_name"                  ] =  None;
 # vars["uut_rev"                   ] = "00_00";
   vars["sump_uut_addr"             ] = "00000098";
+  vars["sump_thread_id"            ] = "00000000";
+  vars["sump_thread_lock_en"       ] = "0";
+  vars["sump_rd_status_legacy_en"  ] = "0";
   vars["sump_script_startup"       ] = "sump_startup.txt";
   vars["sump_script_triggered"     ] = "sump_triggered.txt";
   vars["sump_script_shutdown"      ] = "sump_shutdown.txt";
@@ -9211,6 +10277,7 @@ def init_vars( self, file_ini ):
   vars["sump_ls_clock_freq"        ] = "2.250";
   vars["sump_ls_clock_div"         ] = "1";
   vars["sump_ls_sample_window"     ] = "1";
+  vars["sump_ls_ana_dig_alignment" ] = "4";
 # vars["sump_rle_trigger_latency"  ] = "0.0";
 
   vars["sump_download_disable_ls"  ] = "0";
@@ -9251,19 +10318,27 @@ def init_vars( self, file_ini ):
   vars["scroll_wheel_pan_en"        ] = "1";
   vars["scroll_wheel_pan_reversed"  ] = "0";
   vars["scroll_wheel_zoom_en"       ] = "1";
+  vars["scroll_wheel_analog_en"     ] = "0";
 
   self.var_save_list = ["font_name","font_size","font_size_toolbar","file_log","debug_mode","tool_tips_on_hover",
+    "tool_tips_text_stats_en",
+    "dbg_random_adc_none_samples",
     "screen_color_background","screen_color_foreground","screen_color_selected",
     "screen_color_trigger","screen_color_triggerable","screen_color_cursor",
     "screen_x", "screen_y","screen_save_position",
-    "screen_width","screen_height", "screen_windows","screen_window_rle_time","screen_console_height",
-    "bd_connection","bd_protocol","bd_server_ip","bd_server_socket",
+    "screen_width","screen_height", "screen_windows","screen_window_rle_time",
+    "screen_console_height", "screen_measurements_tall", "screen_adc_sample_points", "screen_save_image_format",
+    "screen_analog_line_width", "screen_analog_bold_width", "screen_max_text_stats_width",
+    "bd_connection","bd_protocol","bd_server_ip","bd_server_socket","bd_server_quit_on_close",
     "aes_key", "aes_authentication",
+    "sump_remote_file_en", "sump_remote_telnet_en", "sump_remote_telnet_port", "sump_remote_telnet_host",
     "sump_script_startup","sump_script_triggered","sump_script_shutdown",
     "sump_path_ram","sump_path_uut","sump_path_dbg",
     "sump_path_jpg","sump_path_png","sump_path_bmp","sump_path_pza","sump_path_vcd",
     "sump_path_vcd","sump_path_view",
     "sump_script_remote",
+    "sump_thread_id", "sump_thread_lock_en", "sump_rd_status_legacy_en",
+    "sump_ls_ana_dig_alignment",
     "vcd_hierarchical", "vcd_hubpod_names", "vcd_hubpod_nums","vcd_group_names", 
 #   "vcd_remove_rips", "vcd_replace_rips",
     "vcd_viewer_en", "vcd_viewer_gtkw_en", "vcd_viewer_path","vcd_viewer_height","vcd_viewer_width",
@@ -9274,6 +10349,7 @@ def init_vars( self, file_ini ):
     "scroll_wheel_pan_en",  
     "scroll_wheel_pan_reversed",
     "scroll_wheel_zoom_en",   
+    "scroll_wheel_analog_en",   
  ];
   
   # Now load an existing ini file and overwrite any defaults
@@ -9394,6 +10470,7 @@ def list2file( file_name, my_list, concat = False ):
   file_out  = open( file_name, type );
   for each in my_list:
     file_out.write( each + "\n" );
+  file_out.flush();# Forces write to disk prior to close. Useful for log files, etc
   file_out.close();
   return;
 
@@ -9869,6 +10946,7 @@ def cmd_list_signal( self, words ):
       rts += ["-sample_unit    %s" % each_sig.sample_unit     ];
       rts += ["-maskable       %s" % each_sig.maskable        ];
       rts += ["-triggerable    %s" % each_sig.triggerable     ];
+      rts += ["-trigger        %s" % each_sig.trigger         ];
       rts += ["-trigger_field %08x" % each_sig.trigger_field   ];
       if each_sig.member_of != None:
         rts += ["-group          %s" % each_sig.member_of.name  ];
@@ -10099,52 +11177,150 @@ def cmd_collapse_group( self, words ):
 
 #####################################
 # Copy a signal into the clipboard ( delete buffer ) 
+#def cmd_copy_signal( self, words ):
+#  print("cmd_copy_signal()");
+## import copy;
+#  rts = [];
+#  if words[1] == None:
+#    for each_sig in self.signal_list:
+#      if each_sig.selected:
+#        each_sig.selected = False;
+##       self.signal_delete_list += [ copy.copy( each_sig ) ];
+##       self.signal_delete_list += [ copy.deepcopy( each_sig ) ];
+##       self.signal_delete_list += [ copy_signal_obj( self, each_sig ) ];
+#        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
+#        print("Copying %s" % each_sig.name );
+#  elif words[1] == "*":
+#    pass;
+#  else:
+#    for ( i, each_sig ) in enumerate( self.signal_list ):
+#      if ( each_sig.name == words[1] ):
+##       self.signal_delete_list += [ copy.copy( each_sig ) ];
+##       self.signal_delete_list += [ copy.deepcopy( each_sig ) ];
+##       self.signal_delete_list += [ copy_signal_obj( self, each_sig ) ];
+#        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
+#  return rts;
+
+
+#####################################
+# Copy a signal into the clipboard ( delete buffer ) 
 def cmd_copy_signal( self, words ):
   print("cmd_copy_signal()");
-# import copy;
+# print(len(self.signal_copy_list));
   rts = [];
   if words[1] == None:
     for each_sig in self.signal_list:
       if each_sig.selected:
         each_sig.selected = False;
-#       self.signal_delete_list += [ copy.copy( each_sig ) ];
-#       self.signal_delete_list += [ copy.deepcopy( each_sig ) ];
-#       self.signal_delete_list += [ copy_signal_obj( self, each_sig ) ];
-        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
-        print("Copying %s" % each_sig.name );
+#       A 0xF9 "Binary Group" isn't type group, but type digital
+#       group_copy = each_sig.type == "group";
+        group_copy = each_sig.collapsable;
+        hier_offset = each_sig.hier_level;
+        recursive_signal_copy(self, each_sig, None, group_copy, hier_offset );
   elif words[1] == "*":
     pass;
   else:
     for ( i, each_sig ) in enumerate( self.signal_list ):
       if ( each_sig.name == words[1] ):
-#       self.signal_delete_list += [ copy.copy( each_sig ) ];
-#       self.signal_delete_list += [ copy.deepcopy( each_sig ) ];
-#       self.signal_delete_list += [ copy_signal_obj( self, each_sig ) ];
-        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
+#       group_copy = each_sig.type == "group";
+        group_copy = each_sig.collapsable;
+        hier_offset = each_sig.hier_level;
+        recursive_signal_copy(self, each_sig, None, group_copy, hier_offset );
+  self.signal_copy_list.reverse();# Not sure why
   return rts;
 
+def recursive_signal_copy( self, parent, copy_parent, group_copy, hier_offset ):
+  self.signal_copy_list += [ copy_signal_obj( self, parent ) ];
+  self.signal_copy_list[-1].hier_level -= hier_offset;
+
+  # Note: there's a strange bug if same group is copied twice. 
+
+  if group_copy:
+    if copy_parent != None:
+      self.signal_copy_list[-1].member_of = copy_parent;
+    parent_copy = self.signal_copy_list[-1];# New parent, not the original
+    for each_sig in self.signal_list:
+      if each_sig.member_of == parent:
+        recursive_signal_copy( self, parent = each_sig, copy_parent = parent_copy, 
+                               group_copy = group_copy, hier_offset = hier_offset );
+  else:
+    self.signal_copy_list[-1].visible    = True;
+    self.signal_copy_list[-1].parent     = None;
+    self.signal_copy_list[-1].member_of  = None;
+    self.signal_copy_list[-1].hier_level = 0;
+
+  return;
 
 #####################################
 # For some reason copy.deepcopy() is crashing, so do it manually
 def copy_signal_obj( self, src_sig ):
-# import copy
-# print("1");
   dst_sig = signal( name = src_sig.name );
   dst_sig.__dict__ = src_sig.__dict__.copy();
+  dst_sig.window = None;
+  dst_sig.selected = False;
+  return dst_sig; 
+
 # dst_sig.name = "new_name";
 # print( dst_sig );
 # print( dst_sig.name );
 # print( dst_sig.parent );
 # print( dst_sig.window );
 # print( dst_sig.view_name );
-  dst_sig.window = None;
 # dst_sig.visible = False;
 # dst_sig.rle_masked = True;
-  dst_sig.selected = False;
 # print("2");
 # self.signal_list += [ dst_sig ];
 # print("3");
-  return dst_sig; 
+
+
+#####################################
+# Delete a signal from being shown <DEL> and also set rle_masked to True if maskable
+#def cmd_delete_signal( self, words ):
+#  rts = [];
+#  if words[1] == None:
+#    for each_sig in self.signal_list:
+#      if each_sig.selected:
+#        each_sig.visible = False;
+#        each_sig.selected = False;
+#        if each_sig.maskable:
+#          each_sig.rle_masked = True;
+#        self.signal_delete_list += [ each_sig ];
+#  elif words[1] == "*":
+#    pass;
+#  else:
+#    for ( i, each_sig ) in enumerate( self.signal_list ):
+#      if ( each_sig.name == words[1] ):
+#        each_sig.visible = False;
+#        if each_sig.maskable:
+#          each_sig.rle_masked = True;
+#        self.signal_delete_list += [ each_sig ];
+#  self.refresh_waveforms = True;
+#  return rts;
+
+
+#####################################
+# Select a signal
+def cmd_select_signal( self, words ):
+  rts = [];
+  if words[1] != None:
+    for ( i, each_sig ) in enumerate( self.signal_list ):
+      if ( each_sig.name == words[1] or words[1] == "*" ):
+        each_sig.selected = True;
+  self.refresh_waveforms = True;
+  return rts;
+
+
+#####################################
+# DeSelect a signal
+def cmd_deselect_signal( self, words ):
+  rts = [];
+  if words[1] != None:
+    for ( i, each_sig ) in enumerate( self.signal_list ):
+      if ( each_sig.name == words[1] or words[1] == "*" ):
+        each_sig.selected = False;
+  self.refresh_waveforms = True;
+  return rts;
+
 
 
 #####################################
@@ -10154,43 +11330,101 @@ def cmd_delete_signal( self, words ):
   if words[1] == None:
     for each_sig in self.signal_list:
       if each_sig.selected:
-        each_sig.visible = False;
-        each_sig.selected = False;
-        if each_sig.maskable:
-          each_sig.rle_masked = True;
-        self.signal_delete_list += [ each_sig ];
+        recursive_signal_delete( self, parent = each_sig );
+#       self.signal_delete_list += [ each_sig ];
   elif words[1] == "*":
     pass;
   else:
     for ( i, each_sig ) in enumerate( self.signal_list ):
       if ( each_sig.name == words[1] ):
         each_sig.visible = False;
-        if each_sig.maskable:
-          each_sig.rle_masked = True;
-        self.signal_delete_list += [ each_sig ];
+        recursive_signal_delete( self, parent = each_sig );
+#       self.signal_delete_list += [ each_sig ];
   self.refresh_waveforms = True;
   return rts;
 
 
+def recursive_signal_delete( self, parent ):
+  parent.visible = False;
+  if parent.maskable:
+    parent.rle_masked = True;
+  for each_sig in self.signal_list:
+    if each_sig.member_of == parent:
+      recursive_signal_delete( self, parent = each_sig );
+  return;
+
+
 #####################################
 # Cut a signal. Delete it from being show and copy to the copy buffer.
+#def cmd_cut_signal( self, words ):
+#  rts = [];
+#  if words[1] == None:
+#    for each_sig in self.signal_list:
+#      if each_sig.selected:
+#        each_sig.selected = False;
+#        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
+#        each_sig.visible = False;
+#  elif words[1] == "*":
+#    pass;
+#  else:
+#    for ( i, each_sig ) in enumerate( self.signal_list ):
+#      if ( each_sig.name == words[1] ):
+#        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
+#        each_sig.visible = False;
+#  self.refresh_waveforms = True;
+#  return rts;
+
+
+#####################################
+# Cut a signal. Delete it from being shown and copy to the copy buffer.
 def cmd_cut_signal( self, words ):
+  print("cmd_cut_signal()");
   rts = [];
   if words[1] == None:
     for each_sig in self.signal_list:
       if each_sig.selected:
         each_sig.selected = False;
-        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
-        each_sig.visible = False;
+#       group_copy = each_sig.type == "group";
+        group_copy = each_sig.collapsable;
+        hier_offset = each_sig.hier_level;
+        recursive_signal_cut(self, each_sig, None, group_copy, hier_offset );
+#       each_sig.visible = False;
   elif words[1] == "*":
     pass;
   else:
     for ( i, each_sig ) in enumerate( self.signal_list ):
       if ( each_sig.name == words[1] ):
-        self.signal_copy_list += [ copy_signal_obj( self, each_sig ) ];
-        each_sig.visible = False;
+#       group_copy = each_sig.type == "group";
+        group_copy = each_sig.collapsable;
+        hier_offset = each_sig.hier_level;
+        recursive_signal_cut(self, each_sig, None, group_copy, hier_offset );
+#       each_sig.visible = False;
+  self.signal_copy_list.reverse();# Not sure why
   self.refresh_waveforms = True;
   return rts;
+
+def recursive_signal_cut( self, parent, copy_parent, group_copy, hier_offset ):
+  self.signal_copy_list += [ copy_signal_obj( self, parent ) ];
+  self.signal_copy_list[-1].hier_level -= hier_offset;
+  parent.visible = False;
+
+  # Note: there's a strange bug if same group is copied twice. 
+
+  if group_copy:
+    if copy_parent != None:
+      self.signal_copy_list[-1].member_of = copy_parent;
+    parent_copy = self.signal_copy_list[-1];# New parent, not the original
+    for each_sig in self.signal_list:
+      if each_sig.member_of == parent:
+        recursive_signal_cut( self, parent = each_sig, copy_parent = parent_copy, 
+                               group_copy = group_copy, hier_offset = hier_offset );
+  else:
+    self.signal_copy_list[-1].visible    = True;
+    self.signal_copy_list[-1].parent     = None;
+    self.signal_copy_list[-1].member_of  = None;
+    self.signal_copy_list[-1].hier_level = 0;
+
+  return;
 
 
 #####################################
@@ -10244,10 +11478,9 @@ def cmd_rename_signal( self, words ):
 # Paste a signal. Identical to insert_signal ( for now anyways )
 def cmd_paste_signal( self, words ):
   rts = [];
-# print("cmd_paste_signal()");
   while len( self.signal_copy_list ) != 0:
     each_sig = self.signal_copy_list.pop();
-    print("cmd_paste_signal() %s" % ( each_sig.name ) );
+#   print("cmd_paste_signal() %s" % ( each_sig.name ) );
 
     # A copied signal has no window
     test_flag = False;
@@ -10257,16 +11490,16 @@ def cmd_paste_signal( self, words ):
         my_window.signal_list += [ each_sig ];
         test_flag = True;
         each_sig.window     = my_window;
-        each_sig.visible    = True;
-        each_sig.parent     = None;
-        each_sig.member_of  = None;
-        each_sig.hier_level = 0;
+#       each_sig.visible    = True;
+#       each_sig.parent     = None;
+#       each_sig.member_of  = None;
+#       each_sig.hier_level = 0;
         each_sig.view_obj   = None;
         each_sig.view_name  = None;
 
         # Create a new blank view for the paste if none exists on selected window
         if len( my_window.view_list ) == 0:
-          my_view = view( name = "blank_view");
+          my_view = view( name = "custom_view");
           my_view.timezone = each_sig.timezone;
           my_window.timezone  = my_view.timezone;
           my_window.view_list += [ my_view ];
@@ -10280,7 +11513,12 @@ def cmd_paste_signal( self, words ):
           if i == 0:
             each_sig.view_obj   = my_window.view_list[i];
             each_sig.view_name  = each_sig.view_obj.name;
-        self.signal_list += [ each_sig ];
+
+        # Only insert if pasting into window with same timezone
+        if each_sig.timezone == my_window.timezone:
+          self.signal_list += [ each_sig ];
+        else:
+          print("cmd_paste_signal() : ERROR incompatible timezone");
 
 #   if to_i != None and from_i != None:
 #     # If the timezones are the same, inherit these attributes from destination
@@ -10351,7 +11589,7 @@ def cmd_insert_signal( self, words ):
         each_sig.view_name  = None;
         # Create a new blank view for the paste if none exists on selected window
         if len( my_window.view_list ) == 0:
-          my_view = view( name = "blank_view");
+          my_view = view( name = "custom_view");
           my_view.timezone = each_sig.timezone;
           my_window.timezone  = my_view.timezone;
           my_window.view_list += [ my_view ];
@@ -10825,14 +12063,23 @@ def cmd_list_window_views( self, words ):
 def cmd_remove_view( self, words ):
   rts = [];
   view_name = words[1];
+  win_num = None;
   if view_name == None:
     return rts;
   if words[2] == "-window":
     win_num = int(words[3],10)-1;
   elif self.window_selected != None:
     win_num = self.window_selected;
+  else:
+    select_window( self, None );
+    win_num = self.window_selected;
+
 # else:
 #   return ["ERROR: no window specified"];
+
+  if ( win_num == None ):
+    print("ERROR-49 : win_num == None ");
+    return rts;
 
   # Apply wildcard search and remove one or more views
 # win_view_name_list = [ each.name for each in self.window_list[win_num].view_list ];
@@ -11017,8 +12264,45 @@ def cmd_apply_view( self, words ):
 def cmd_select_window( self, words ):
   print("select_window()");
   rts = [];
-  wave_i = int( words[1] ) -1;
-  select_window( self, wave_i );
+  try:
+    wave_i = int( words[1] ) -1;
+    select_window( self, wave_i );
+  except:
+    if words[1] == "*":
+      for i in range(0,3):
+        select_window( self, i );
+  return rts;
+
+
+#####################################
+# close specified window
+def cmd_close_window( self, words ):
+  print("close_window()");
+  rts = [];
+  try:
+    wave_i = int( words[1] ) -1;
+    close_window( self, wave_i );
+  except:
+    if words[1] == "*":
+      for i in range(0,3):
+        close_window( self, i );
+  return rts;
+
+
+#####################################
+# close bd_shell window
+def cmd_close_bd_shell( self ):
+  print("close_bd_shell()");
+  rts = [];
+  close_bd_shell( self );
+  return rts;
+
+#####################################
+# open  bd_shell window
+def cmd_open_bd_shell( self ):
+  print("open_bd_shell()");
+  rts = [];
+  open_bd_shell( self );
   return rts;
 
 
@@ -11130,6 +12414,13 @@ def cmd_add_view( self, words, defer_gui_update = False ):
     create_view_selections( self );
   return rts;
 
+# Reduce a floating point number to three decimal places max
+def three_decimal_places( num ):
+# num = num * 1000;
+# num = float( int( num ) );# Truncate
+# num = num / 1000.0;
+  num = round( num, 3 );
+  return num;
 
 # Convert a float to a comma separated string. This is a new Python method so
 # make a function so that users with older python can bypass rather than crash
@@ -11332,6 +12623,7 @@ def cmd_save_list( self, words ):
     rts += [ "Saving %s" % filename ];
     try:
       list2file( filename, lst_list );
+      self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Saved %s" % filename);
     except:
       rts += [ "ERROR Saving %s" % filename ];
 
@@ -11730,6 +13022,7 @@ def cmd_save_vcd( self, words ):
     rts = [ "Saving %s" % filename ];
     try:
       list2file( filename, vcd_list );
+      self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Saved %s" % filename);
     except:
       rts = [ "ERROR Saving %s" % filename ];
 
@@ -11827,21 +13120,71 @@ def recurs_group_name( self, signal_list, my_signal, name ):
 
 
 #####################################
-def cmd_save_pic( self, words ):
+def cmd_add_measurement( self, words ):
+  log(self,["cmd_add_measurement()"]);
+  rts = [];
+  for each_sig in self.signal_list:
+    if ( each_sig.name == words[1] or words[1] == "*" or each_sig.selected ):
+      rts += ["Adding %s" % each_sig.name ];
+      self.measurement_list += [ each_sig ];
+
+  # Deselect so isn't displayed as selected signal cursor info
+  for each_sig in self.signal_list:
+    if each_sig.selected:
+      each_sig.selected = False;
+      self.refresh_waveforms = True;
+      self.refresh_sig_names = True;
+  return rts;
+
+
+#####################################
+def cmd_remove_measurement( self, words ):
+  log(self,["cmd_remove_measurement()"]);
+  rts = [];
+  # Note you can't "del" multiple items, so just build a new list instead
+  new_list = [];
+  for each_sig in self.measurement_list:
+    if ( each_sig.name == words[1] or words[1] == "*" or each_sig.selected ):
+      rts += ["Removing %s" % each_sig.name ];
+    else:
+      new_list += [ each_sig ];
+  self.measurement_list = new_list;
+
+  # Deselect so isn't displayed as selected signal cursor info
+  for each_sig in self.signal_list:
+    if each_sig.selected:
+      each_sig.selected = False;
+      self.refresh_waveforms = True;
+      self.refresh_sig_names = True;
+  return rts;
+
+
+#####################################
+def cmd_save_window( self, words ):
+  log(self,["cmd_save_window()"]);
+  rts = image_save( self, words );
+  return rts;
+
+
+#####################################
+def cmd_save_screen( self, words ):
+  log(self,["cmd_save_screen()"]);
+  rts = image_save( self, words );
+  return rts;
+
+
+#####################################
+# Called by cmd_save_window, _screen
+def image_save( self, words ):
   rts = [];
   cmd = words[0];
-  ext = None;
-  if   ( cmd == "save_jpg" ):
-    ext = "jpg";
-  elif ( cmd == "save_bmp" ):
-    ext = "bmp";
-  else:
+  ext = self.vars["screen_save_image_format"];# png jpg bmp
+# self.screen_shot = True;
+# draw_surfaces(self);
+# self.screen_shot = False;
+
+  if ext not in ["png","jpg","bmp"]:
     ext = "png";
-
-  if ext == None and words[1] == None:
-    ext = "png";
-
-
   if words[1] == None:
     filename_path = self.vars["sump_path_"+ext];
     filename_base = os.path.join( filename_path, "sump3_" );
@@ -11858,20 +13201,71 @@ def cmd_save_pic( self, words ):
     except:
       log(self,["ERROR: unable to mkdir %s" % filename_path]);
 
-  if self.window_selected == None:
-    self.pygame.image.save( self.screen, filename );
-  else:
+  if cmd == "save_window":
     my_window  = self.window_list[ self.window_selected ];
     my_image   = my_window.image;
     my_surface = my_window.surface;
-    txt = "Saving %s" % filename;
+  else:
+    my_surface = self.screen;
+
+  txt = "Saving %s" % filename;
+  rts += [ txt ];
+  try:
+    self.pygame.image.save( my_surface, filename );
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Saved %s" % filename);
+  except:
+    txt = "ERROR Saving %s" % filename;
     rts += [ txt ];
-    try:
-      self.pygame.image.save( my_surface, filename );
-    except:
-      txt = "ERROR Saving %s" % filename;
-      rts += [ txt ];
+# draw_surfaces(self);
   return rts; 
+
+
+#####################################
+#def cmd_save_pic( self, words ):
+#  rts = [];
+#  cmd = words[0];
+#  ext = None;
+#  if   ( cmd == "save_jpg" ):
+#    ext = "jpg";
+#  elif ( cmd == "save_bmp" ):
+#    ext = "bmp";
+#  else:
+#    ext = "png";
+#
+#  if ext == None and words[1] == None:
+#    ext = "png";
+#
+#
+#  if words[1] == None:
+#    filename_path = self.vars["sump_path_"+ext];
+#    filename_base = os.path.join( filename_path, "sump3_" );
+#    filename = make_unique_filename( self, filename_base, "."+ext );
+#  else:
+#    (file_name, file_ext ) = os.path.splitext( words[1] );
+#    file_ext = file_ext.lower();
+#    filename_path = self.vars["sump_path_"+file_ext[-3:]];
+#    filename = os.path.join( filename_path, words[1] );
+#
+#  if ( not os.path.exists( filename_path ) ):
+#    try:
+#      os.mkdir(filename_path);
+#    except:
+#      log(self,["ERROR: unable to mkdir %s" % filename_path]);
+#
+#  if self.window_selected == None:
+#    self.pygame.image.save( self.screen, filename );
+#  else:
+#    my_window  = self.window_list[ self.window_selected ];
+#    my_image   = my_window.image;
+#    my_surface = my_window.surface;
+#    txt = "Saving %s" % filename;
+#    rts += [ txt ];
+#    try:
+#      self.pygame.image.save( my_surface, filename );
+#    except:
+#      txt = "ERROR Saving %s" % filename;
+#      rts += [ txt ];
+#  return rts; 
 
 ###############################################################################
 # Given a file_header ( like foo_ ), check for foo_0000, then foo_0001, etc
@@ -12013,6 +13407,7 @@ def cmd_save_view( self, words ):
     list2file( filename, txt_list );
     ( file_path, file_no_path ) = os.path.split( filename );
     cmd_add_view_ontap(self, ["add_view_ontap", file_no_path ] );
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Saved %s" % file_no_path);
   except:
     rts += [ "ERROR Saving %s" % filename ];
   return rts;
@@ -12320,8 +13715,15 @@ def cmd_unix( self, words ):
     except:
       log(self,["ERROR: Failed to chdir to %s" % words[1] ]);
   elif words[0] == "cp":
-    import shutil
-    shutil.copy2( words[1], words[2] );
+    try:
+      import shutil
+      src = os.path.join( self.path_to_uut, words[1] );
+      dst = os.path.join( self.path_to_uut, words[2] );
+      shutil.copy2( src, dst );
+    except:
+      print("cmd_unix(): ERROR cp");
+      print( src, dst );
+
   elif words[0] == "more":
     rts = file2list( words[1] );
   elif words[0] in ["?","help","manual"]:
@@ -12343,7 +13745,11 @@ def cmd_unix( self, words ):
       else:
         cmd = "notepad.exe";
 #     os.chdir( org_cwd );
-      os.system( cmd + " " + words[1] );
+      if self.path_to_uut != None:
+        file_name = os.path.join(self.path_to_uut,words[1] );
+      else:
+        file_name = words[1];
+      os.system( cmd + " " + file_name);
     except:
       rts += ["ERROR: "+cmd+" "+words[1] ];
   elif words[0] == "?" :
@@ -12361,7 +13767,9 @@ def cmd_unix( self, words ):
   elif words[0] == "sleep_ms":
 #   dur = float( words[1] ) / 1000.0;
 #   time.sleep(dur); 
-    pygame.time.wait( float(dur) );# time in mS. 
+#   pygame.time.wait( float(dur) );# time in mS. 
+    dur = int( words[1] );
+    pygame.time.wait( dur );# time in mS. 
   elif words[0] == "env":
     txt_list = [];
     for key in self.vars:
@@ -12402,6 +13810,11 @@ def cmd_assign_var( self, words ):
     for each_sig in self.signal_list:
       if each_sig.name == sig_name:
         assign_signal_attribute_by_name(self, each_sig, sig_attribute, sig_value );
+  if "screen_width" in words[0] or "screen_height" in words[0]:
+    self.screen_width = int( self.vars["screen_width"], 10 );
+    self.screen_height = int( self.vars["screen_height"], 10 );
+    self.options.resolution = ( self.screen_width, self.screen_height );
+    screen_set_size(self);
   return rts;
 
 
@@ -12547,6 +13960,12 @@ def adjust_color( color_in, percent ):
 def proc_key( self, event ):
   rts = False;
 
+  analog_signals_selected = False;
+  for each_signal in self.signal_list:
+    if each_signal.selected and each_signal.type == "analog":
+      analog_signals_selected = True;
+      break;
+
   # K_ESCAPE : Unselect any selected signal. If none selected, unselect the Window itself
   if event.key == pygame.K_ESCAPE:
     rts = proc_unselect(self);
@@ -12598,10 +14017,61 @@ def proc_key( self, event ):
 #   resize_containers(self);
 #   rts = True;# Force a refresh
 
+#HERE1234
+  elif ( analog_signals_selected and
+#   ( ( event.key == pygame.K_LEFT  or event.key == pygame.K_a ) or
+#     ( event.key == pygame.K_RIGHT or event.key == pygame.K_d ) or
+#   ( ( event.key == pygame.K_UP    or event.key == pygame.K_w ) or
+#     ( event.key == pygame.K_DOWN  or event.key == pygame.K_s )    )) :
+#   if ( event.key == pygame.K_UP    or event.key == pygame.K_w ):
+#     k = "up";
+#   elif ( event.key == pygame.K_DOWN  or event.key == pygame.K_s ):
+#     k = "down";
+#   else:
+#     k = "";
+    ( ( event.key == pygame.K_UP                               ) or
+      ( event.key == pygame.K_DOWN                             )    )) :
+    if ( event.key == pygame.K_UP                               ):
+      k = "up";
+    elif ( event.key == pygame.K_DOWN                             ):
+      k = "down";
+    else:
+      k = "";
+
+    if self.container_display_list[0].visible:
+      for each_signal in self.signal_list:
+        if each_signal.selected and each_signal.type == "analog":
+          if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
+               self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
+            if ( k == "up" ):
+              each_signal.vertical_offset -= .01;
+            elif ( k == "down" ):
+              each_signal.vertical_offset += .01;
+          else:
+            if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
+                 self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
+              if ( k == "down" ):
+                proc_cmd( self, "scale_down_fine" );
+              elif ( k == "up" ):
+                proc_cmd( self, "scale_up_fine" );
+            else:
+              if ( k == "down" ):
+                proc_cmd( self, "scale_down" );
+              elif ( k == "up" ):
+                proc_cmd( self, "scale_up" );
+
+      # Only update the windows that have the selected signals in them
+      for (i,each_win) in enumerate( self.window_list ):
+        for each_signal in self.signal_list:
+          if each_signal.selected:
+            if each_signal in each_win.signal_list:
+              if not i in self.refresh_window_list:
+                self.refresh_window_list += [i];
+
   # K_LEFT : Pan Left
-  elif event.key == pygame.K_LEFT or event.key == pygame.K_a :
+# elif event.key == pygame.K_LEFT or event.key == pygame.K_a :
+  elif event.key == pygame.K_LEFT                            :
     if self.file_dialog == None and not self.cmd_console.visible:
-#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 8;
@@ -12612,30 +14082,37 @@ def proc_key( self, event ):
         for i in range(0,iters):
           proc_cmd( self, "pan_left" );
       if self.select_text_i != None:
-        proc_acq_adj_dec( self );
+        rate = 8;
+        if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
+             self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
+          rate = 1;
+        proc_acq_adj_dec( self, rate );
       rts = False;# Selected window only refresh
 
   # K_RIGHT : Pan Right
-  elif event.key == pygame.K_RIGHT or event.key == pygame.K_d :
+# elif event.key == pygame.K_RIGHT or event.key == pygame.K_d :
+  elif event.key == pygame.K_RIGHT                            :
     if self.file_dialog == None and not self.cmd_console.visible:
-#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 8;
       else:
         iters = 1;
-#     if self.window_selected != None:
       if self.window_selected != None and self.select_text_i == None:
         for i in range(0,iters):
           proc_cmd( self, "pan_right" );
       if self.select_text_i != None:
-        proc_acq_adj_inc( self );
+        rate = 8;
+        if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
+             self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
+          rate = 1;
+        proc_acq_adj_inc( self, rate );
       rts = False;# Selected window only refresh
 
   # K_UP : Zoom In  
-  elif event.key == pygame.K_UP or event.key == pygame.K_w :
+# elif event.key == pygame.K_UP or event.key == pygame.K_w :
+  elif event.key == pygame.K_UP                            :
     if self.file_dialog == None and not self.cmd_console.visible:
-#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 4;
@@ -12645,24 +14122,31 @@ def proc_key( self, event ):
         for i in range(0,iters):
           proc_cmd( self, "zoom_in" );
       if self.select_text_i != None:
-        proc_acq_adj_inc( self );
+        rate = 8;
+        if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
+             self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
+          rate = 1;
+        proc_acq_adj_inc( self, rate );
     rts = False;# Selected window only refresh
 
   # K_DOWN : Zoom Out 
-  elif event.key == pygame.K_DOWN or event.key == pygame.K_s :
+# elif event.key == pygame.K_DOWN or event.key == pygame.K_s :
+  elif event.key == pygame.K_DOWN                            :
     if self.file_dialog == None and not self.cmd_console.visible:
-#   if self.file_dialog == None:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 4;
       else:
         iters = 1;
-#     if self.window_selected != None:
       if self.window_selected != None and self.select_text_i == None:
         for i in range(0,iters):
           proc_cmd( self, "zoom_out" );
       if self.select_text_i != None:
-        proc_acq_adj_dec( self );
+        rate = 8;
+        if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
+             self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
+          rate = 1;
+        proc_acq_adj_dec( self, rate );
     rts = False;# Selected window only refresh
 
   # K_DELETE : Make selected invisible ( remove from display )
@@ -12736,7 +14220,23 @@ def proc_key( self, event ):
 
 #####################################
 def proc_cmd( self, cmd, quiet = False ):
-  self.cmd_history += [ cmd ];
+
+  if "!" not in cmd:
+    self.cmd_history += [ cmd ];
+  else:
+    if cmd == "!!":
+      cmd = self.cmd_history[-1];
+    elif "!" in cmd:
+      try:
+        cmd = self.cmd_history[ int(cmd[1:]) ];
+      except:
+        cmd = "";
+
+  # Support "> foo.txt" results to a file.
+  output_to_file = None;
+  if ">" in cmd:
+    (cmd,output_to_file) = cmd.split(">");
+    output_to_file = output_to_file.replace(" ","");
 
   # Look for any variables ( like paths ) in cmd and replace if found.
   if "$" in cmd:
@@ -12766,6 +14266,8 @@ def proc_cmd( self, cmd, quiet = False ):
 # self.cmd_console.add_output_line_to_log( cmd ,is_bold=True, remove_line_break=True);
   valid = False;
   rts = [];
+
+
   if   cmd_txt == "refresh"           : cmd_txt = "gui_refresh";
   if   cmd_txt == "quit" or cmd_txt == "die" : cmd_txt = "exit";
   if   cmd_txt == "ur"                : cmd_txt = "sump_user_read";
@@ -12803,8 +14305,9 @@ def proc_cmd( self, cmd, quiet = False ):
   elif cmd_txt == "sump_user_read"    : rts = cmd_sump_user_read(self, words ); valid = True;
   elif cmd_txt == "sump_user_write"   : rts = cmd_sump_user_write(self, words ); valid = True;
 
-  elif cmd_txt == "sump_set_trigs"    : rts = cmd_sump_set_trigs(self); valid = True;
-  elif cmd_txt == "sump_clr_trigs"    : cmd_sump_clr_trigs(self); valid = True;
+  elif cmd_txt == "sump_set_trigs"    : rts = cmd_sump_set_trigs(self,words ); valid = True;
+# elif cmd_txt == "sump_clr_trigs"    : cmd_sump_clr_trigs(self,words); valid = True;
+  elif cmd_txt == "sump_clear_trigs"  : cmd_sump_clear_trigs(self,words); valid = True;
   elif cmd_txt == "save_pza"          : rts = cmd_save_pza(self,words); valid = True;
   elif cmd_txt == "load_pza"          : rts = cmd_load_pza(self,words); valid = True;
   elif cmd_txt == "load_uut"          : rts = cmd_load_uut(self,words); valid = True;
@@ -12825,6 +14328,8 @@ def proc_cmd( self, cmd, quiet = False ):
   elif cmd_txt == "create_fsm_state"  : rts = cmd_create_fsm_state(self, words ); valid = True;
   elif cmd_txt == "list_signal"       : rts = cmd_list_signal(self, words ); valid = True;
   elif cmd_txt == "delete_signal"     : rts = cmd_delete_signal(self, words ); valid = True;
+  elif cmd_txt == "select_signal"     : rts = cmd_select_signal(self, words ); valid = True;
+  elif cmd_txt == "deselect_signal"   : rts = cmd_deselect_signal(self, words ); valid = True;
   elif cmd_txt == "insert_signal"     : rts = cmd_insert_signal(self, words ); valid = True;
 # elif cmd_txt == "clone_signal"      : rts = cmd_clone_signal(self, words ); valid = True;
   elif cmd_txt == "cut_signal"        : rts = cmd_cut_signal(self, words ); valid = True;
@@ -12849,12 +14354,21 @@ def proc_cmd( self, cmd, quiet = False ):
   elif cmd_txt == "list_window_views" : rts = cmd_list_window_views( self, words ); valid = True;
   elif cmd_txt == "add_view"          : rts = cmd_add_view( self, words ); valid = True;
 # elif cmd_txt == "save_view"         : rts = cmd_save_view( self, words ); valid = True;
-  elif cmd_txt == "save_pic"          : rts = cmd_save_pic( self, words ); valid = True;
-  elif cmd_txt == "save_png"          : rts = cmd_save_pic( self, words ); valid = True;
-  elif cmd_txt == "save_jpg"          : rts = cmd_save_pic( self, words ); valid = True;
-  elif cmd_txt == "save_bmp"          : rts = cmd_save_pic( self, words ); valid = True;
+
+# elif cmd_txt == "save_pic"          : rts = cmd_save_pic( self, words ); valid = True;
+# elif cmd_txt == "save_png"          : rts = cmd_save_pic( self, words ); valid = True;
+# elif cmd_txt == "save_jpg"          : rts = cmd_save_pic( self, words ); valid = True;
+# elif cmd_txt == "save_bmp"          : rts = cmd_save_pic( self, words ); valid = True;
+
   elif cmd_txt == "save_view"         : rts = cmd_save_view( self, words ); valid = True;
   elif cmd_txt == "save_list"         : rts = cmd_save_list( self, words ); valid = True;
+
+  elif cmd_txt == "save_window"        : rts = cmd_save_window( self, words ); valid = True;
+  elif cmd_txt == "save_screen"        : rts = cmd_save_screen( self, words ); valid = True;
+  elif cmd_txt == "add_measurement"    : rts = cmd_add_measurement( self, words ); valid = True;
+  elif cmd_txt == "remove_measurement" : rts = cmd_remove_measurement( self, words ); valid = True;
+
+
   elif cmd_txt == "add_grid"          : rts = cmd_add_grid( self, words ); valid = True;
   elif cmd_txt == "remove__grid"      : rts = cmd_remove_grid( self, words ); valid = True;
   elif cmd_txt == "apply_view"        : rts = cmd_apply_view( self, words ); valid = True;
@@ -12862,6 +14376,12 @@ def proc_cmd( self, cmd, quiet = False ):
   elif cmd_txt == "apply_view_all"    : rts = cmd_apply_view( self, ["","*","",""]); valid = True;
   elif cmd_txt == "remove_view_all"   : rts = cmd_remove_view( self,["","*","",""] ); valid = True;
   elif cmd_txt == "select_window"     : rts = cmd_select_window( self, words ); valid = True;
+  elif cmd_txt == "close_window"      : rts = cmd_close_window( self, words ); valid = True;
+  elif cmd_txt == "close_bd_shell"    : rts = cmd_close_bd_shell( self ); valid = True;
+  elif cmd_txt == "open_bd_shell"     : rts = cmd_open_bd_shell( self ); valid = True;
+  elif cmd_txt == "select_acquisition" : rts = cmd_select_acquisition( self ); valid = True;
+  elif cmd_txt == "select_navigation"  : rts = cmd_select_navigation( self ); valid = True;
+  elif cmd_txt == "select_viewconfig"  : rts = cmd_select_viewconfig( self ); valid = True;
 # elif cmd_txt == "delete_view"       : rts = cmd_delete_view( self, words ); valid = True;
   elif cmd_txt == "font_smaller"      : rts = cmd_font_smaller( self ); valid = True;
   elif cmd_txt == "font_larger"       : rts = cmd_font_larger( self ); valid = True;
@@ -12871,6 +14391,8 @@ def proc_cmd( self, cmd, quiet = False ):
   elif cmd_txt == "zoom_out"          : rts = cmd_zoom_out( self ); valid = True;
   elif cmd_txt == "scroll_up"         : rts = cmd_scroll_up( self ); valid = True;
   elif cmd_txt == "scroll_down"       : rts = cmd_scroll_down( self ); valid = True;
+  elif cmd_txt == "scroll_analog_up"   : rts = cmd_scroll_analog_up( self ); valid = True;
+  elif cmd_txt == "scroll_analog_down" : rts = cmd_scroll_analog_down( self ); valid = True;
   elif cmd_txt == "page_up"           : rts = cmd_page_up( self ); valid = True;
   elif cmd_txt == "page_down"         : rts = cmd_page_down( self ); valid = True;
   elif cmd_txt == "pan_left"          : rts = cmd_pan_left( self ); valid = True;
@@ -12890,6 +14412,10 @@ def proc_cmd( self, cmd, quiet = False ):
 # else:
 #   print("IDK");
 
+  if   cmd_txt == "history" :
+    valid = True;
+    rts = [ "%d %s" % ( i, each ) for (i,each) in enumerate( self.cmd_history ) ];
+
   # "sump_user_ctrl = a" and sump_user_ctrl[3:0] = a" are handled differently
   if words[1] == "=":
     if words[0][0:len("sump_user_ctrl")] == "sump_user_ctrl" and "[" in words[0] and "]" in words[0]: 
@@ -12905,14 +14431,28 @@ def proc_cmd( self, cmd, quiet = False ):
   if rts != None and not quiet:
     for each in rts:
       if ( self.cmd_console.visible == True and each != None ):
-        self.cmd_console.add_output_line_to_log( each ,is_bold=False, remove_line_break=False);
+        if type( each ) == list:
+          for each_each in each:
+            try:
+              self.cmd_console.add_output_line_to_log( each_each ,is_bold=False, remove_line_break=False);
+            except:
+              log(self,["ERROR-42"]);
+        else:
+          try:
+            self.cmd_console.add_output_line_to_log( each ,is_bold=False, remove_line_break=False);
+          except:
+            log(self,["ERROR-43"]);
     log(self, rts );
+
+  if output_to_file != None and self.path_to_uut != None:
+    list2file( os.path.join(self.path_to_uut, output_to_file), rts );
+
 
 # self.cmd_console.add_output_line_to_log("\n",is_bold=False, remove_line_break=False);
   if ( self.cmd_console.visible == True and not quiet ):
 #   self.cmd_console.add_output_line_to_log( "\r",is_bold=False, remove_line_break=False);
     self.cmd_console.restore_default_prefix();
-  return;
+  return rts;
 
 ###############################################################################
 def init_manual( self ):
@@ -13077,6 +14617,7 @@ def init_manual( self ):
   a+=["   bd_protocol                : 'poke' only supported connection protocol.   "];
   a+=["   bd_server_ip               : 'localhost' or IP ('127.0.0.1') of bd_server."];
   a+=["   bd_server_socket           : '21567' TCP/IP socket of bd_server.   "];
+  a+=["   bd_server_quit_on_close    : Quit bd_server when GUI closes.       "];
   a+=["   aes_key                    : 256 bit hex AES key.                  "];
   a+=["   aes_authentication         : 1 = use AES authentication for remote."];
   a+=["  5.2 SUMP Hardware                                                  "];
@@ -13092,6 +14633,8 @@ def init_manual( self ):
   a+=["   sump_trigger_nth           : Nth trigger to trigger on. 1 to 2^16     "];
   a+=["   sump_trigger_type          : Trigger type. or_rising, etc.            "];
   a+=["   sump_download_ondemand     : Only downlad Pods that have views applied."];
+  a+=["   sump_thread_lock_en        : 1 to enable hardware thread locking.     "];
+  a+=["   sump_thread_id             : Static thread_id or 00000000 for dynamic."];
   a+=["  5.3 Unit Under Test                                                    "];
   a+=["   uut_name                   : String name for UUT.                     "];
 # a+=["   uut_rev                    : String revision for UUT.                 "];

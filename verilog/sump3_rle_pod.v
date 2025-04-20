@@ -93,6 +93,7 @@
 -- 0.17  10.31.24  khubbard       Expanded ctrl_0_reg to add all params
 -- 0.18  11.05.24  khubbard       Params for norom_view_ dwords,bytes,bits
 -- 0.19  12.16.24  khubbard       Default pod_user_mask_en=1
+-- 0.20  01.29.25  khubbard       Fixed simulation issue with bit masking mux.
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -197,6 +198,7 @@ module sump3_rle_pod #
  
   reg  [rle_data_bits-1:0]       events_meta      = 0;
   reg  [rle_data_bits-1:0]       events_loc       = 0;
+  reg  [rle_data_bits-1:0]       events_loc_muxd  = 0;
   reg  [rle_data_bits-1:0]       events_p1        = 0;
   reg  [rle_data_bits-1:0]       events_p2        = 0;
   reg                            init_jk          = 0;
@@ -443,23 +445,31 @@ end
 
 
 //-----------------------------------------------------------------------------
+// Only bottom 32 bits are bit maskable
+//-----------------------------------------------------------------------------
+integer t;
+generate
+always @ ( * ) begin
+  for ( t = 0; t < rle_data_bits; t=t+1 ) begin
+    if ( t < 32 ) begin
+      events_loc_muxd[t] <= events_loc[t] & rle_bit_mask_l[t];
+    end else begin
+      events_loc_muxd[t] <= events_loc[t];
+    end
+  end
+end
+endgenerate
+
+
+//-----------------------------------------------------------------------------
 // Flop some inputs. They might be from a different domain.
 //-----------------------------------------------------------------------------
-integer t,u,v,w;
 always @ ( posedge clk_cap ) begin
   trigger_p1  <= cfg_trigger;
   events_meta <= events[rle_data_bits-1:0];
   events_loc  <= events_meta[rle_data_bits-1:0];
-
-  // Bit Masking is only supported on bottom 32 bits
-  if ( rle_data_bits > 32 ) begin
-    events_p1[rle_data_bits-1:32] <= events_loc[rle_data_bits-1:32];
-    events_p1[31:0]               <= events_loc & rle_bit_mask_l[31:0];
-  end else begin
-    events_p1[rle_data_bits-1:0 ] <= events_loc & rle_bit_mask_l[rle_data_bits-1:0];
-  end
-
-  events_p2 <= events_p1[rle_data_bits-1:0];
+  events_p1   <= events_loc_muxd[rle_data_bits-1:0 ];
+  events_p2   <= events_p1[rle_data_bits-1:0];
 
   if ( pod_disable == 1 ) begin
     events_meta <= 0;
