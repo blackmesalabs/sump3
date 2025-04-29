@@ -21,6 +21,9 @@
 # c:\python37\Scripts\pip.exe download pygame-gui
 # c:\python37\Scripts\pip.exe install *.whl          
 #
+# WARNING : Latest pygame-gui breaks things. Force install of older version
+#   pip install --force-reinstall -v "pygame-gui==0.6.12"
+#
 # 2023.03.14 : Beginning
 # 2023.03.24 : DONE Memory leak on scrolling
 # 2023.04.04 : DONE replace ana_values and dig_values with just values.
@@ -162,6 +165,10 @@
 #              On zoom_full, trigger location was off by 2 samples in any analog_ls window.
 # 2025.04.15 : Added sump_ls_ana_dig_alignment feature. Default to 4.
 # 2025.04.17 : Fixed cmd_save_pza() bug not saving to sump_pza directory when fn specified.
+# 2025.04.29 : UIPanel hide() show() upgrade to be Pygame-GUI 0.6.13 compatible.
+# 2025.04.29 : bd_shell console close_window_button enabled to be Pygame-GUI 0.6.13 compatible.
+# 2025.04.29 : Tweaked image offsets in container_builder_waveforms() to align with > 0.6.9 changes.
+
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -217,6 +224,20 @@ from collections import deque
 
 # https://pygame-gui.readthedocs.io/en/v_067/index.html
 # python -m pip install pygame-gui
+
+print("Importing module PyGame");
+import pygame;
+print ( pygame.__version__ );
+print("Importing module PyGame-GUI");
+import pygame_gui;
+#print ( pygame_gui.__version__ );
+#print ( dir( pygame_gui ) );
+#print ( pygame_gui.__doc__  );
+#print ( pygame_gui.__file__  );
+#print ( pygame_gui.__loader__  );
+#print ( pygame_gui.__name__  );
+#print ( pygame_gui.__package__  );
+#print ( pygame_gui.__spec__  );
 
 # Python does not come with PyGame and PyGame-GUI by default, so do some text
 # based hand holding when those modules are not yet installed.
@@ -279,7 +300,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.04.17";
+    self.vers = "2025.04.29";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -363,6 +384,11 @@ class main:
     self.window_list[1].panel.visible = ( ( self.screen_windows & 0x2 ) != 0x0 );
     self.window_list[2].panel.visible = ( ( self.screen_windows & 0x4 ) != 0x0 );
     self.cmd_console.visible          = ( ( self.screen_windows & 0x8 ) != 0x0 );
+
+    #HERE74
+    if self.cmd_console.visible:
+      self.cmd_console.show();# New 2025.04.29
+
     resize_containers(self);
     update_toggle_buttons(self);
 #   auto_select_window( self );
@@ -396,11 +422,14 @@ class main:
   def process_events(self):
     for event in pygame.event.get():
 #     button1_handled = False;
-#     print( dir( event ) );
-#     print( event.type );
+#     if event.type != 1024:
+#       print("-----");
+#       print( event.type );
+#       print( dir( event ) );
       if event.type == pygame.QUIT:
         self.running = False
         shutdown(self);
+     
 
       # Keep track of focus, otherwise scroll wheel may click when moving mouse 
       # across the windows screen even though this application doesn't have focus.
@@ -489,7 +518,6 @@ class main:
           self.refresh_cursors   = True;
 
       # MOUSEBUTTONDOWN
-# HERE53
       if event.type == pygame.MOUSEBUTTONDOWN:
 #       button1_handled = False;
 #       new_window_selected = False;
@@ -872,7 +900,6 @@ class main:
         if ( self.has_focus and (  event.button == 4 or event.button == 5 ) ):
           self.last_scroll_wheel_tick = tick_time;
 
-# HERE54
 #       # 1==LeftButton detect if a waveform window has been selected. Highlight the border
         if event.button == 1 :
           mouse_release_cursor( self );# Release any cursor being dragged
@@ -1049,8 +1076,31 @@ class main:
 #         proc_cmd( self, "time_lock" );
 #         update_toggle_buttons(self);
 
+# HERE72
         if ( event.ui_object_id == "#Controls.#Display.#bd_shell"):
-          self.cmd_console.visible = not self.cmd_console.visible;
+#         self.cmd_console.visible = not self.cmd_console.visible;
+          vis                      = not self.cmd_console.visible;
+          # New 2025.04.28
+#         if not self.cmd_console.visible:
+          if not vis:
+#           print("Hide console!");
+#           print( self.cmd_console.ui_container );
+#           self.cmd_console.ui_container.visible = False;
+#           self.cmd_console.ui_container.hide();
+            self.cmd_console.hide();
+#           for each in self.cmd_console.get_container():
+#             each.hide();
+          else:
+            self.cmd_console.show( );
+#           for each in self.cmd_console.get_container():
+#             each.show();
+
+           
+#         print("dir(self.cmd_console)");
+#         print( dir( self.cmd_console ) );
+#         print("__contains__");
+#         print( self.cmd_console.__contains__ );
+     
           update_toggle_buttons(self);
           # screen_windows is a hex number of 4 binary bits indicating
           # which windows are visible. 3 waveforms and 1 bd_shell
@@ -1061,13 +1111,43 @@ class main:
           self.vars["screen_windows"] = "%01x" % self.screen_windows;
           screen_erase(self);
           resize_containers(self);
+#         pygame.display.update();# New 2025.04.29     
+#         self.ui_manager.update( time_delta = 0 );# New 2025.04.29
 
+#       if ( event.ui_object_id == "#console_window.#close_button"):
+#         self.cmd_console.visible = False;
+#         screen_erase(self);
+#         resize_containers(self);
+#         id_str = ["#Controls","#Display", "#bd_shell"];
+#         update_toggle_buttons(self);
+
+#HERE75
         if ( event.ui_object_id == "#console_window.#close_button"):
-          self.cmd_console.visible = False;
-          screen_erase(self);
-          resize_containers(self);
-          id_str = ["#Controls","#Display", "#bd_shell"];
-          update_toggle_buttons(self);
+#         self.cmd_console.process_event( event );
+          self.cmd_console.hide();
+#         self.cmd_console.visible = False;
+
+          # Create a new version since PygameGUI just killed the original
+          self.cmd_console = UIConsoleWindow(rect=pygame.rect.Rect((10,10), (200,100)),
+                                     manager=self.ui_manager,window_title="bd_shell");
+#         self.cmd_console.hide();
+#         self.cmd_console.show();
+#         screen_erase(self);
+#         resize_containers(self);
+          # And now close it, which is really just hiding it.
+          cmd_close_bd_shell(self);
+
+#         self.cmd_console.hide();
+#         update_toggle_buttons(self);
+#         # screen_windows is a hex number of 4 binary bits indicating
+#         # which windows are visible. 3 waveforms and 1 bd_shell
+#         if ( self.cmd_console.visible == True ):
+#           self.screen_windows = ( self.screen_windows & 0x7 ) + 0x8;
+#         else:
+#           self.screen_windows = ( self.screen_windows & 0x7 ) + 0x0;
+#         self.vars["screen_windows"] = "%01x" % self.screen_windows;
+#         screen_erase(self);
+#         resize_containers(self);
 
         if ( event.ui_object_id == "#Controls.#Display.#Cursor-1" ):
           self.cursor_list[0].visible = not self.cursor_list[0].visible;
@@ -1108,34 +1188,36 @@ class main:
           self.refresh_sig_names = True;
 
         if ( event.ui_object_id == "#Controls.#Main.#Views" ):
-#         self.container_view_list[0].visible        = not self.container_view_list[0].visible;
-          self.container_view_list[0].visible        = True;
-          self.container_acquisition_list[0].visible = False;
-          self.container_display_list[0].visible     = False;
-          self.select_text_i = None;# Clear old text selections
-          main_menu_press = True;
-          self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
- 
-          # Update the view selections whenever view controls are opened
-          if self.container_view_list[0].visible:
-            create_view_selections(self);
+#         self.container_view_list[0].visible        = True;
+#         self.container_acquisition_list[0].visible = False;
+#         self.container_display_list[0].visible     = False;
+#         self.select_text_i = None;# Clear old text selections
+#         main_menu_press = True;
+#         self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
+#
+#         # Update the view selections whenever view controls are opened
+#         if self.container_view_list[0].visible:
+#           create_view_selections(self);
+          cmd_select_viewconfig( self );
 
         if ( event.ui_object_id == "#Controls.#Main.#Acquisition" ):
-          self.container_view_list[0].visible        = False;
-          self.container_acquisition_list[0].visible = True;
-          self.container_display_list[0].visible     = False;
-          self.select_text_i = None;# Clear old text selections
-          main_menu_press = True;
-          self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
+#         self.container_view_list[0].visible        = False;
+#         self.container_acquisition_list[0].visible = True;
+#         self.container_display_list[0].visible     = False;
+#         self.select_text_i = None;# Clear old text selections
+#         main_menu_press = True;
+#         self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
+          cmd_select_acquisition( self );
 
         if ( event.ui_object_id == "#Controls.#Main.#Display" ):
-          self.container_view_list[0].visible        = False;
-          self.container_acquisition_list[0].visible = False;
-          self.container_display_list[0].visible     = True;
-          self.select_text_i = None;# Clear old text selections
-          main_menu_press = True;
-          auto_select_window(self);
-          self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
+#         self.container_view_list[0].visible        = False;
+#         self.container_acquisition_list[0].visible = False;
+#         self.container_display_list[0].visible     = True;
+#         self.select_text_i = None;# Clear old text selections
+#         main_menu_press = True;
+#         auto_select_window(self);
+#         self.refresh_waveforms = True;# New to highlight triggerable signals in Acquisition
+          cmd_select_navigation( self );
 #       print( event.ui_object_id );
 
         if ( main_menu_press == True ):
@@ -1395,7 +1477,9 @@ def select_window( self, wave_i ):
   if wave_i != None: 
     # New 2023.06.16 If selected window is not visible, make it visible
     if ( self.window_list[wave_i].panel.visible != True ):
-      self.window_list[wave_i].panel.visible = True;   
+# 2025.04.29
+#     self.window_list[wave_i].panel.visible = True;   
+      self.window_list[wave_i].panel.show();
       resize_containers(self);# Resize based on screen dimensions
     if ( self.window_list[wave_i].panel.visible == True ):
       if self.window_list[wave_i].panel.border_colour != self.color_selected:
@@ -1430,19 +1514,23 @@ def select_window( self, wave_i ):
 def close_window( self, wave_i ):
   if wave_i != None: 
     if ( self.window_list[wave_i].panel.visible == True ):
-      self.window_list[wave_i].panel.visible = False;   
+# 2025.04.29
+#     self.window_list[wave_i].panel.visible = False;   
+      self.window_list[wave_i].panel.hide();
       resize_containers(self);# Resize based on screen dimensions
       update_toggle_buttons( self );
   return;
 
 def close_bd_shell( self ):
-  self.cmd_console.visible = False;
+# self.cmd_console.visible = False;
+  self.cmd_console.hide();
   resize_containers(self);# Resize based on screen dimensions
   update_toggle_buttons( self );
   return;
 
 def open_bd_shell( self ):
-  self.cmd_console.visible = True;
+# self.cmd_console.visible = True;
+  self.cmd_console.show();
   resize_containers(self);# Resize based on screen dimensions
   update_toggle_buttons( self );
   return;
@@ -2046,7 +2134,6 @@ def display_text_stats( self ):
       for each_sig in self.signal_list:
         if each_sig.trigger:
           extra_txt_list += [" "+each_sig.name];
-#HERE52
     else:
 #     acq_list += ["SUMP not connected"];
       acq_list += ["HW Status: Not Connected"];
@@ -2187,7 +2274,6 @@ def create_text_stats( self, single_stat, which_i ):
       sample_period_us = clk_us * val;
       val = sample_period_us;
 
-#HERE44
       if self.sump_connected:
         ana_ram_depth    = self.sump.cfg_dict['ana_ram_depth'];
         ana_rec_profile  = self.sump.cfg_dict['ana_record_profile'];
@@ -3259,6 +3345,8 @@ def draw_digital_lines( self, my_window ):
 
   # https://stackoverflow.com/questions/1634509/is-there-any-way-to-clear-a-surface
   my_surface.fill(self.color_bg);
+# HERE81
+# my_surface.fill(self.color_fg);
 
   w = my_surface.get_width();
   h = my_surface.get_height();
@@ -3868,7 +3956,6 @@ def create_drawing_lines( self, my_win ):
             rle_value_time_pairs += [ ( each_value, rle_time-samples_start_offset )];
           prev_rle_time  = rle_time;
           prev_rle_value = each_value;
-        #HERE101
         if rle_min_max != None and self.screen_window_rle_time == 1:
           ( rle_time_min, rle_time_max ) = rle_min_max;
           t_start = rle_time_min+samples_start_offset;
@@ -4235,7 +4322,6 @@ def create_drawing_lines( self, my_win ):
 #         line_list += [ ( w+10,y4 ) , ( w, y4 ), ];
 #         line_list += [ ( w-10,y4 ) , ( w, y4 ), ];
 #         line_list += [ ( w,y3 ) , ( w-10, y3 ) ];
-# HERE 2025.01.17
 
 
         draw_list += [ ( each_sig, y_space, line_list, point_list ) ];
@@ -4381,7 +4467,9 @@ def resize_containers(self):
 # console_h = 200;
   console_h = int( self.vars["screen_console_height" ],10 );
   right_w = 275;# Fixed width based on two buttons wide
-  margin = 5;
+
+# margin = 5;
+  margin = 3;
   w = self.screen_width;
 
   w = w - ( margin * 3 );
@@ -4401,15 +4489,18 @@ def resize_containers(self):
     waves_h = screen_h;
 
   # Height of each wave is fraction of total
-# print( waves_to_display );
   if waves_to_display == 0:
     wave_h = 100;# A valid resolution for surface needed even if not displayed.
     waves_h = 0;# A valid resolution for surface needed even if not displayed.
     if self.cmd_console.visible == True:
       console_h = screen_h - margin;
   else:
-    wave_h = int(( waves_h - ( margin * waves_to_display ) ) / waves_to_display);
-    wave_h = wave_h - margin;
+#   wave_h = int(( waves_h - ( margin * waves_to_display ) ) / waves_to_display);
+#   wave_h = wave_h - margin;
+# 2025.04.29
+    wave_h = int(( waves_h - float( margin * waves_to_display ) ) / waves_to_display);
+    if waves_to_display == 1:
+      wave_h = wave_h - margin;
 
   # Now place everybody
   if self.cmd_console.visible == True:
@@ -4424,7 +4515,6 @@ def resize_containers(self):
 
   # 0 = Waves, 1 = Controls on Right
   h = waves_h;
-# print(h);
   self.container_list[0].set_dimensions( (left_w,h) );
   self.container_list[1].set_dimensions( (right_w,screen_h) );
 
@@ -4453,10 +4543,8 @@ def resize_containers(self):
           each.panel.show();
         else:
           each.panel.hide();
+
   update_toggle_buttons(self);
-# auto_select_window(self);
-
-
   init_surfaces(self);# NEW
   self.refresh_waveforms = True;
   return;
@@ -4610,11 +4698,13 @@ def init_widgets(self):
   container_builder_waveforms( self, rect, object_id_list );
 
   self.cmd_console = UIConsoleWindow(rect=pygame.rect.Rect((10,10), (200,100)),
-                                     manager=self.ui_manager,window_title="bd_shell")
-  self.cmd_console.resizable = False;
-  self.cmd_console.draggable = False;
-  self.cmd_console.visible = False;
-  self.cmd_console.close_window_button = False;
+                                     manager=self.ui_manager,window_title="bd_shell");
+# HERE73
+  self.cmd_console.hide();# New 2025.04.28
+# self.cmd_console.resizable = False;
+# self.cmd_console.draggable = False;
+# self.cmd_console.visible = False;
+# self.cmd_console.close_window_button = False;
 # self.cmd_console.enable_close_button = False;
 # self.cmd_console.bring_to_front_on_focused = True;
 # self.cmd_console.set_log_prefix('bd_shell>');
@@ -4751,7 +4841,11 @@ def container_builder_waveforms( self, rect, object_id_list ):
                              object_id = object_id_list[i] );
     new_window.surface  = pygame.Surface( (10,10) );
 #   new_window.image    = UIImage( relative_rect=(1,1,10,10),
-    new_window.image    = UIImage( relative_rect=pygame.Rect(1,1,10,10),
+
+# 6 is an offset so that black waveform image will be centered in the UIPanel
+#   note that the Panel's offset has changed slightly from Pygame-GUI 0.6.9 to 0.6.13
+#   new_window.image    = UIImage( relative_rect=pygame.Rect(1,1,10,10),
+    new_window.image    = UIImage( relative_rect=pygame.Rect(6,6,10,10),
                              image_surface=new_window.surface,
                              manager=self.ui_manager,
                              container=new_window.panel );
@@ -4984,31 +5078,118 @@ def container_builder_display( self, rect, y_top, button_txt_list ):
 
 
 def cmd_select_acquisition( self ):
+# for each in self.display_button_list:
+#   each.visible = False;
+#   each.hide();
   self.container_acquisition_list[0].visible = True;
   self.container_display_list[0].visible     = False;
   self.container_view_list[0].visible        = False;
   self.select_text_i                         = None;# Clear old text selections
   self.refresh_waveforms                     = True;
   proc_main_menu_button_press( self );
+  hide_the_invisibles( self );
   return [];
 
 def cmd_select_navigation( self ):
+# for each in self.display_button_list:
+#   each.visible = False;
+#   each.hide();
   self.container_acquisition_list[0].visible = False;
   self.container_display_list[0].visible     = True;
   self.container_view_list[0].visible        = False;
   self.select_text_i                         = None;# Clear old text selections
   self.refresh_waveforms                     = True;
   proc_main_menu_button_press( self );
+  hide_the_invisibles( self );
   return [];
 
 def cmd_select_viewconfig( self ):
+# for each in self.display_button_list:
+#   each.visible = False;
+#   each.hide();
   self.container_acquisition_list[0].visible = False;
   self.container_display_list[0].visible     = False;
   self.container_view_list[0].visible        = True;
   self.select_text_i                         = None;# Clear old text selections
   self.refresh_waveforms                     = True;
   proc_main_menu_button_press( self );
+  hide_the_invisibles( self );
+  # Update the view selections whenever view controls are opened
+  create_view_selections(self);
   return [];
+
+def stats( self ):
+  print("------");
+  print( len( self.container_acquisition_list ));
+  print( len( self.container_display_list     ));
+  print( len( self.container_view_list        ));
+  print( len( self.display_button_list        ));
+  return;
+
+def hide_all( self ):
+  for each in self.container_acquisition_list:
+    each.visible = False;
+    each.hide();
+
+  for each in self.container_display_list:
+    each.visible = False;
+    each.hide();
+
+  for each in self.container_view_list:
+    each.visible = False;
+    each.hide();
+
+  for each in self.display_button_list:
+    each.visible = False;
+    each.hide();
+
+  return;
+
+# I can't explain why acquisition_list and view_list have buttons added to 
+# their lists, but display_list is length=1 just for the panel and has
+# a completely separate display_button_list for its buttons.
+# TODO: Look into refactoring this as is very confusing to look at.
+
+def hide_the_invisibles( self ):
+  vis = self.container_acquisition_list[0].visible;
+  for each in self.container_acquisition_list:
+    if vis:
+      each.show();
+    else:
+      each.hide();
+
+  vis = self.container_display_list[0].visible;
+# for each in self.container_display_list:
+  for each in self.display_button_list:
+    if vis:
+      each.show();
+    else:
+      each.hide();
+
+  vis = self.container_view_list[0].visible;
+  for each in self.container_view_list:
+    if vis:
+      each.show();
+    else:
+      each.hide();
+
+  return;
+
+
+def debug_containers( self ):
+  print("container_acquisition_list");
+  for each in self.container_acquisition_list:
+    print( each.visible );
+  print("container_view_list");
+  for each in self.container_view_list:
+    print( each.visible );
+  print("container_display_list");
+  for each in self.container_display_list:
+    print( each.visible );
+  print("display_button_list");
+  for each in self.display_button_list:
+    print( each.text, each.object_ids );
+  return;
 
 
 ###############################################################################
@@ -9414,7 +9595,6 @@ class sump3_hw:
 #   list2file("rle_hub_pod_list.txt", dump_list );
 
     self.expand_view_rom_generates();
-    #HERE
 
     return True;
 
@@ -9464,7 +9644,6 @@ class sump3_hw:
         new_list += [ each ];
       else:
         parse_list += [each ];
-#HERE
 #       if ( "end_view" in each ):
 #       if ( "end_source" in each ):
 #       if ( "end_source" in each or "end_view" in each ):
@@ -11704,7 +11883,7 @@ def cmd_add_view_ontap( self, words, defer_gui_update = False ):
           else:
             view_name = view_name_from_file_name( each_file );
 
-# HERE This doesn't work quite right - removed
+# This doesn't work quite right - removed
 #         # Look for any variables ( like $file_name ) and replace if found.
 #         if view_name != None:
 #           if "$" in view_name:
@@ -14017,7 +14196,6 @@ def proc_key( self, event ):
 #   resize_containers(self);
 #   rts = True;# Force a refresh
 
-#HERE1234
   elif ( analog_signals_selected and
 #   ( ( event.key == pygame.K_LEFT  or event.key == pygame.K_a ) or
 #     ( event.key == pygame.K_RIGHT or event.key == pygame.K_d ) or
@@ -14278,6 +14456,9 @@ def proc_cmd( self, cmd, quiet = False ):
 
   if   cmd_txt == "exit"              : shutdown(self); valid = True; sys.exit();
   elif cmd_txt == "source"            : rts = cmd_source(self, words ); valid = True;
+  elif cmd_txt == "debug_containers"  : debug_containers(self);         valid = True;
+  elif cmd_txt == "hide_all"          : hide_all(self);                 valid = True;
+  elif cmd_txt == "stats"             : stats(self);                    valid = True;
   elif cmd_txt == "cd"                : rts = cmd_unix(self, words ); valid = True;
   elif cmd_txt == "pwd"               : rts = cmd_unix(self, words ); valid = True;
   elif cmd_txt == "more"              : rts = cmd_unix(self, words ); valid = True;
