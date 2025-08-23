@@ -1,6 +1,6 @@
 #!/usr/bin/python
 ###############################################################################
-# Copyright (C) Kevin M. Hubbard 2024 BlackMesaLabs
+# Copyright (C) Kevin M. Hubbard 2025 BlackMesaLabs
 # sump3.py borrows heavily from sump2.py and inherits its open-source license.
 #
 # This program is free software; you can redistribute it and/or modify it under
@@ -168,7 +168,14 @@
 # 2025.04.29 : UIPanel hide() show() upgrade to be Pygame-GUI 0.6.13 compatible.
 # 2025.04.29 : bd_shell console close_window_button enabled to be Pygame-GUI 0.6.13 compatible.
 # 2025.04.29 : Tweaked image offsets in container_builder_waveforms() to align with > 0.6.9 changes.
-
+# 2025.07.11 : Draw wide trigger bar when trigger is offscreen.
+# 2025.07.11 : Removed status read immediately after arm as created samples. HERE52.
+# 2025.07.11 : Added 2nd attempt for list2file() which rando failed every so often.
+# 2025.08.05 : Implemented offset_codes.
+# 2025.08.22 : Added try+except to log file writes and flushes.
+# 2025.08.22 : cmd_zoom_to_cursors() : Pinch Zoom to +/- infinity added.
+# 2025.08.22 : bd_shell bug introduced with new PyGame-GUI module fixed.
+#              added self.cmd_console.command_entry.unfocus() then focus() after <CR>
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -300,7 +307,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.04.29";
+    self.vers = "2025.08.22";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -711,6 +718,7 @@ class main:
               if i == 0: each_cursor.x = x1 - x_fudge;
               if i == 1: each_cursor.x = x2 + x_fudge;
             update_cursors_to_mouse(self);
+#           print( x1, x2 );
             proc_cmd( self, "zoom_to_cursors" );
           else:
             # Btn3 is also "unselect" of selected signals.
@@ -980,6 +988,9 @@ class main:
 #         print( self.cmd_console.command );
 #         print( len( cmd_str ));
           proc_cmd( self, cmd_str );
+          self.cmd_console.command_entry.set_text("");
+          self.cmd_console.command_entry.unfocus();
+          self.cmd_console.command_entry.focus();
           # See pygame_gui.elements.ui_text_entry_line module
           # Annoying bug after command the cursor position shifts right
 #         self.cmd_console.command_entry.set_text("");
@@ -1957,6 +1968,7 @@ def display_text_stats( self ):
                 # TODO: This should be a list comprehension
                 for val_raw in each_sig.values: 
                   if val_raw != None:
+                    val_raw += each_sig.offset_codes;
                     val_raw *= each_sig.units_per_code;
                     val_raw += each_sig.offset_units;
                     val_raw = round( val_raw, 3 );
@@ -1971,8 +1983,10 @@ def display_text_stats( self ):
                   val_max_str += each_sig.units;
                   min_max_txt = " "+"Min/Max "+val_min_str+"/"+val_max_str;
 
-                  range_min = three_decimal_places( each_sig.offset_units );
-                  range_max = three_decimal_places( each_sig.offset_units + ( each_sig.range * each_sig.units_per_code ));
+#                 range_min = three_decimal_places( each_sig.offset_units );
+#                 range_max = three_decimal_places( each_sig.offset_units + ( each_sig.range * each_sig.units_per_code ));
+                  range_min = three_decimal_places( ( each_sig.offset_codes * each_sig.units_per_code ) + each_sig.offset_units );
+                  range_max = three_decimal_places( each_sig.offset_units + ( (each_sig.range+each_sig.offset_codes) * each_sig.units_per_code ));
                   range_min_str = comma_separated(range_min); # Comma thousand separator
                   range_max_str = comma_separated(range_max); # Comma thousand separator
                   range_min_str += each_sig.units;
@@ -1989,6 +2003,7 @@ def display_text_stats( self ):
                   if sample_index < len( each_sig.values ) and sample_index > 0:
                     val_raw = each_sig.values[sample_index];
                     if val_raw != None:
+                      val_raw += each_sig.offset_codes;
                       val_raw *= each_sig.units_per_code;
                       val_raw += each_sig.offset_units;
                       analog_value_list += [ val_raw ];
@@ -2362,28 +2377,24 @@ def proc_acq_adj( self, step ):
       min_val = 0; max_val = 0;
       # The trigger assigned signal determines the range for analog trigger level
       for each_sig in self.signal_list:
-#       print( each_sig.name, each_sig.trigger, each_sig.type );
         if each_sig.trigger and each_sig.type == "analog":
-# 2025.01.20
-#         max_val = each_sig.range * each_sig.units_per_code;
-#         min_val = 0;
-#         step_adc = step * ((each_sig.range+1)//128);# Roughly 1% +/- change 
           if each_sig.range+1 <= 256:
             step_adc = step;
           else:
             step_adc = step * ((each_sig.range+1)//1024);# Roughly 1% +/- change when step is 8
-          max_val = each_sig.offset_units + ( each_sig.range * each_sig.units_per_code );
-          min_val = each_sig.offset_units + 0.0;
+
+#         max_val = each_sig.offset_units + ( each_sig.range * each_sig.units_per_code );
+#         min_val = each_sig.offset_units + 0.0;
+
+          max_val = each_sig.offset_units + ( ( each_sig.range + each_sig.offset_codes ) * each_sig.units_per_code );
+          min_val = each_sig.offset_units + ( ( 0              + each_sig.offset_codes ) * each_sig.units_per_code );
+
           val_f += step_adc * each_sig.units_per_code;
           val_f = round( val_f, 3 );
 
           # Re-assign the units from say mV to uA
           disp_units = each_sig.units;
           self.acq_parm_list[ self.select_text_i + i_offset ] = ( disp_name, var_name, disp_units );  
-#         print("name    = %s" % each_sig.name );
-#         print("  max_val = %f" % max_val );
-#         print("  min_val = %f" % min_val );
-#         print("  val_f l = %f" % val_f   );
       if val_f < min_val : val_f = min_val;
       if val_f > max_val : val_f = max_val;
       self.vars[var_name] = "%.3f" % val_f;
@@ -3400,10 +3411,8 @@ def draw_digital_lines( self, my_window ):
       except:
         log(self,["ERROR-2011 : Analog drawing failure"]);
 
-  # Draw the trigger
+  # Draw trigger
   if my_trigger_x != None:
-    if ( my_trigger_x+7 ) >= w:
-      my_trigger_x = w - 7;# Draw at far right if off screen
     x1 = my_trigger_x;
     x2 = my_trigger_x;
     y1 = 0;
@@ -3661,6 +3670,22 @@ def draw_digital_lines( self, my_window ):
                   log(self,["ERROR-2119"]);
               last_x = x;
               last_txt = txt;
+
+  # Draw wide trigger if offscreen
+  if my_trigger_x != None:
+    x1 = my_trigger_x;
+    x2 = my_trigger_x;
+    y1 = 0;
+    y2 = h;
+    # If off screen right, draw wide bar indicator
+    if ( x1+12 ) >= w or x1 < 5:
+      if ( x1+12 ) >= w:
+        x1 = w - 12;# Draw at far right extra wide
+      else:
+        x1 = 0;# Draw at far left extra wide
+      x2 = x1;
+      w1 = 5;
+      self.pygame.draw.line(my_surface,self.color_trigger,(x1,y1),(x2,y2), 5);
 
   # Draw RLE Time Range in upper right corner and Window Number in upper left corner
   my_color = self.color_fg;
@@ -5835,6 +5860,7 @@ def cmd_zoom_to_cursors( self ):
     samples_start_offset  = my_win.samples_start_offset;
     samples_total = my_win.samples_total;
     timezone      = my_win.timezone;
+#   print( x_space , samples_start_offset, samples_total );
 
 #   print("samples_start_offset  = %d" % samples_start_offset );
 #   print("samples_total = %d" % samples_total );
@@ -5844,6 +5870,8 @@ def cmd_zoom_to_cursors( self ):
       return rts;
 #   if self.cursor_list[0].visible and self.cursor_list[1].visible:
 #   if x_space != 0:
+
+
     if True:
       c1_i = float( self.cursor_list[0].x / x_space ) + samples_start_offset;
       c2_i = float( self.cursor_list[1].x / x_space ) + samples_start_offset;
@@ -5853,6 +5881,21 @@ def cmd_zoom_to_cursors( self ):
       else:
         c_i_left  = int( c2_i );
         c_i_right = int( c1_i );
+
+      # If leftmost cursor is less than 0, pinch to offscreen 1st sample 
+      if min( self.cursor_list[0].x, self.cursor_list[1].x ) < 0 :
+#       print("Oy1");
+        c_i_left  = 0;
+
+      # If rightmost cursor is greater than screen, pinch to offscreen last sample 
+      w = my_win.surface.get_width();
+      margin = 5;# This magic number margin stuff is a complete mess. Needs refactoring.
+      w = w + margin * 3;
+      #   print( w, self.cursor_list[0].x, self.cursor_list[1].x );
+      if max( self.cursor_list[0].x, self.cursor_list[1].x ) > w :
+#       print("Oy2");
+        c_i_right = samples_total;
+
       samples_to_draw = c_i_right - c_i_left;
       samples_start_offset = c_i_left;
 
@@ -5860,7 +5903,6 @@ def cmd_zoom_to_cursors( self ):
       # and then subtract 10% from the start offset
       samples_to_draw = int( samples_to_draw * 1.2 );
       samples_start_offset -= int( samples_to_draw * 0.10 );
-
 
 #     print("c_i_left        = %d" % c_i_left      );
 #     print("c_i_right       = %d" % c_i_right     );
@@ -6299,8 +6341,14 @@ def cmd_load_pza( self, words ):
 def log( self, txt_list ):
   for each in txt_list:
     print( str( each ) );
-    self.file_log.write( str(each) + "\n" );
-  self.file_log.flush();# without flush(), a crash results in zero length file
+    try:
+      self.file_log.write( str(each) + "\n" );
+    except:
+      print("log() : ERROR writing to self.file_log");
+  try:
+    self.file_log.flush();# without flush(), a crash results in zero length file
+  except:
+    print("log() : ERROR flushing self.file_log");
   return;
 
 
@@ -7044,13 +7092,16 @@ def cmd_sump_arm( self ):
   if ( trig_type == "analog_rising" or trig_type == "analog_falling" ):
     trig_ana_lvl = float( self.vars["sump_trigger_analog_level"] );
     for each_sig in self.signal_list:
-#     print( each_sig.name );
       if each_sig.trigger and each_sig.units_per_code != None:
         # 2025.01.20
         trig_ana_lvl -= each_sig.offset_units;
+        trig_ana_code = int( trig_ana_lvl / each_sig.units_per_code );
+        trig_ana_code -= each_sig.offset_codes;
         ch = decode_adc_ch_number( each_sig );
-        trig_ana_field = ( ch << 24 ) + ( 0x00FFFFFF & int( trig_ana_lvl / each_sig.units_per_code ));
-#       print("Oy %s is your trigger of source %s %d" % ( each_sig.name, each_sig.source, ch ) );
+
+        trig_ana_field = ( ch << 24 ) + ( 0x00FFFFFF & trig_ana_code                                );
+#       trig_ana_field = ( ch << 24 ) + ( 0x00FFFFFF & int( trig_ana_lvl / each_sig.units_per_code ));
+
       #  trigger_adc_level   <= ctrl_25_reg[23:0];
       #  trigger_adc_ch      <= ctrl_25_reg[31:24];
 
@@ -7135,9 +7186,16 @@ def cmd_sump_arm( self ):
   print( stat_str );
 
   self.sump.wr( self.sump.cmd_state_arm,   0x00000000 );
-  pygame.time.wait(100);# time in mS. 
-  self.sump.rd_status();
-  ( stat_str, status ) = self.sump.status;
+
+  # Reading status after arm may create undesired capture data, so don't.
+  #HERE52
+  if False:
+    pygame.time.wait(100);# time in mS. 
+    self.sump.rd_status();
+    ( stat_str, status ) = self.sump.status;
+  else:
+    stat_str = "Query Required";
+    status   = 0x00;
   print( stat_str );
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" HW Status: "+stat_str);
   cmd_thread_unlock(self);
@@ -9080,7 +9138,7 @@ class signal(object):
     self.units           = None;# ie "mV" or "uA"
     self.units_per_code  = 1.0; # ie "1.0"
     self.offset_units    = 0.0;  # Only applies to cursor measurements, not drawn lines
-    self.offset_codes    = 0;    # Not used yet
+    self.offset_codes    = 0;    # Offset an ADC value
     self.sample_period   = None;# ie 10.0 ns
     self.sample_unit     = None;# ie ns us ms
     self.color           = None;
@@ -10088,7 +10146,8 @@ class sump3_hw:
     elif ( ( status & self.status_armed     ) != 0x00 ):
       str = "armed";
     else:
-      str = "unknown %02x" % status ;
+#     str = "unknown %02x" % status ;
+      str = "0x%02x" % status ;# Unknown, so report in hex
     self.status = ( str, status );
     return;
 
@@ -10629,7 +10688,14 @@ def star_match( search_str, search_list ):
   return d;
 
 def hexlist2file( file_name, my_list ):
-  file_out  = open( file_name, 'w' );
+  try:
+    file_out  = open( file_name, 'w' );
+  except:
+    print("ERROR: hexlist2file %s. Trying again..." % file_name );
+    import time;
+    time.sleep(0.1);# Sleep 100ms
+    file_out  = open( file_name, 'w' );
+
   for each_sample in my_list:
     hex_str = "";
     for each_dword in each_sample:
@@ -10640,13 +10706,21 @@ def hexlist2file( file_name, my_list ):
   return;
 
 
+# Once in a blue moon file open() would fail - not even in concat mode
+# Trying a 2nd time seems to fix the issue. Odd.
 def list2file( file_name, my_list, concat = False ):
-  if ( concat ):
+  if concat:
     type = 'a';
   else:
     type = 'w';
-# print( file_name, type );
-  file_out  = open( file_name, type );
+  try:
+    file_out  = open( file_name, type );
+  except:
+    print("ERROR: list2file %s. Trying again..." % file_name );
+    import time;
+    time.sleep(0.1);# Sleep 100ms
+    file_out  = open( file_name, type );
+
   for each in my_list:
     file_out.write( each + "\n" );
   file_out.flush();# Forces write to disk prior to close. Useful for log files, etc
@@ -11274,12 +11348,14 @@ def cmd_hide_toggle_signal( self, words ):
 
 #####################################
 # Given a signal name, toggle the masked attribute <END>
+# Support unmasking a masked signal even if maskable is false
+# as a small view rom may apply masked to a group of signals
 def cmd_mask_toggle_signal( self, words ):
   rts = [];
   if words[1] == None:
     for each_sig in self.signal_list:
 #     if each_sig.selected:
-      if each_sig.selected and each_sig.maskable:
+      if each_sig.selected and ( each_sig.maskable or each_sig.rle_masked ):
         each_sig.selected = False;
         each_sig.rle_masked = not each_sig.rle_masked;
         self.refresh_waveforms = True;
@@ -13550,6 +13626,7 @@ def cmd_save_view( self, words ):
         txt += "-range %s " % each_sig.range;
         txt += "-units %s " % each_sig.units;
         txt += "-offset_units %s " % each_sig.offset_units;
+        txt += "-offset_codes %s " % each_sig.offset_codes;
         txt += "-units_per_code %s " % each_sig.units_per_code;
       else:
         if each_sig.rle_masked == True and each_sig.maskable:
@@ -13669,6 +13746,27 @@ def assign_signal_attribute_by_name( self, new_signal, attribute, value ):
     new_signal.hidden = ( value.lower() in ["true","yes","1"]);
   elif attribute == "triggerable"     :
     new_signal.triggerable = ( value.lower() in ["true","yes","1"]);
+# elif attribute == "trigger"         :
+#   if new_signal.triggerable:
+#     new_signal.trigger = value.lower() in ["true","yes","1"];
+#     if not new_signal.trigger:
+#       new_signal.selected = True;# Needed to toggle off
+#       selected_signal = True;
+#     cmd_sump_set_trigs( self, ["",""] );
+#     if selected_signal:
+#       new_signal.selected = False;# Return things as we found them.
+#   if not new_signal.selected:
+#     new_signal.selected = True;# set/clear trig only work with selected signals
+#     selected_signal = True;
+#   else:
+#     selected_signal = False;
+#   if ( value.lower() in ["true","yes","1"]):
+#     cmd_sump_set_trigs( self, ["",""] );
+#   else:
+#     cmd_sump_clear_trigs( self, ["",""] );
+#   if selected_signal:
+#     new_signal.selected = False;# Return things as we found them.
+# HERE55
   elif attribute == "maskable"     :
     new_signal.maskable = ( value.lower() in ["true","yes","1"]);
   elif attribute == "color"           : new_signal.color = color_lookup(value);
