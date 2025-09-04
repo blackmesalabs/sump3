@@ -176,6 +176,9 @@
 # 2025.08.22 : cmd_zoom_to_cursors() : Pinch Zoom to +/- infinity added.
 # 2025.08.22 : bd_shell bug introduced with new PyGame-GUI module fixed.
 #              added self.cmd_console.command_entry.unfocus() then focus() after <CR>
+# 2025.09.04 : Tweaked image offsets in container_builder_waveforms() to align with > 0.6.14 changes.
+# 2025.09.04 : ScrollUp and ScrollDown buttons added for those missing a mouse scroll wheel.
+# 2025.09.04 : K_SPACE does expland/collapse toggle.
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -237,6 +240,8 @@ import pygame;
 print ( pygame.__version__ );
 print("Importing module PyGame-GUI");
 import pygame_gui;
+#import importlib.metadata;
+#print( importlib.metadata.version(pygame_gui) );
 #print ( pygame_gui.__version__ );
 #print ( dir( pygame_gui ) );
 #print ( pygame_gui.__doc__  );
@@ -307,7 +312,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.08.22";
+    self.vers = "2025.09.04";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -2543,11 +2548,17 @@ def mouse_get_text( self ):
 # On button-1 press, see if it is over a signal name and select it.
 # Check first to see if it is a collapsable (group) parent and toggle that
 # instead if clicked by the [+]/[-] area.
+# HERE99
 def mouse_event_single_click( self ):
   (self.mouse_x,self.mouse_y) = pygame.mouse.get_pos();
   margin = 5;
   rts = False;# Assume nothing select and no redraw
   self.mouse_btn1_select = False;# True if last Btn1 Down selected a signal
+
+  # Calculate Width and Height of font for future reference
+  txt = self.font.render("[+]",True, ( 255,255,255 ) );
+  exp_width = txt.get_width();
+
   for each_signal in self.signal_list:
 #   if each_signal.visible == True and each_signal.type != "spacer":
     if each_signal.visible == True:
@@ -2557,8 +2568,10 @@ def mouse_event_single_click( self ):
 
         if ( ( self.mouse_x > ( x1+x2    ) ) and
              ( self.mouse_x < ( x1+x2+w2 ) ) and
-             ( self.mouse_y > ( y1+y2    ) ) and
-             ( self.mouse_y < ( y1+y2+h2 ) )     ):
+#            ( self.mouse_y > ( y1+y2    ) ) and
+#            ( self.mouse_y < ( y1+y2+h2 ) )     ):
+             ( self.mouse_y >= ( y1+y2    ) ) and
+             ( self.mouse_y <= ( y1+y2+h2 ) )     ):
           rts = True;#Force a redraw
 #         # If left 1/4 of text is clicked on a collapsable, toggle it
 #         # otherwsie select it if right 3/4 of text is clicked.
@@ -2568,9 +2581,12 @@ def mouse_event_single_click( self ):
 #         # otherwise select it if right 1/2 of text is clicked.
 #         if each_signal.collapsable and ( self.mouse_x < ( x1+x2+w2/2 ) ):
 
-          # If left 1/3 of text is clicked on a collapsable, toggle it
-          # otherwise select it if right 2/3 of text is clicked.
-          if each_signal.collapsable and ( self.mouse_x < ( x1+x2+w2/3 ) ):
+#         # If left 1/3 of text is clicked on a collapsable, toggle it
+#         # otherwise select it if right 2/3 of text is clicked.
+#         if each_signal.collapsable and ( self.mouse_x < ( x1+x2+w2/3 ) ):
+
+          # If within the [+] region then collapse/expand
+          if each_signal.collapsable and ( self.mouse_x < ( x1+x2+exp_width ) ):
             each_signal.collapsed = not each_signal.collapsed;
             # Now find any children and change their visibility
             if each_signal.collapsed:
@@ -2878,6 +2894,8 @@ def convert_object_id_to_tool_tip( self, id_str ):
   elif id_str == "#Controls.#Display.#Search->"        : cmd_str = "search_forward";
   elif id_str == "#Controls.#Display.#<-Pan"           : cmd_str = "pan_left";
   elif id_str == "#Controls.#Display.#Pan->"           : cmd_str = "pan_right";
+  elif id_str == "#Controls.#Display.#ScrollUp"        : cmd_str = "scroll_up";
+  elif id_str == "#Controls.#Display.#ScrollDown"      : cmd_str = "scroll_down";
 # elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
 # elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
 # elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
@@ -3048,6 +3066,8 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Display.#Search->"        : cmd_str = "search_forward";
   elif id_str == "#Controls.#Display.#<-Pan"           : cmd_str = "pan_left";
   elif id_str == "#Controls.#Display.#Pan->"           : cmd_str = "pan_right";
+  elif id_str == "#Controls.#Display.#ScrollUp"        : cmd_str = "scroll_up";
+  elif id_str == "#Controls.#Display.#ScrollDown"      : cmd_str = "scroll_down";
 # elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
 # elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
 # elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
@@ -4811,7 +4831,8 @@ def init_widgets(self):
                       "ZoomIn",       "ZoomOut",      
                       "ZoomCurs",     "ZoomFull",      
                       "<-Search",     "Search->",      
-                      "<-Pan",        "Pan->",         ];
+                      "<-Pan",        "Pan->",      
+                      "ScrollUp",     "ScrollDown", ];
 
   # Remove these buttons if the screen is really short. User will have to use
   # bd_shell CLI interface to get these features.
@@ -4869,8 +4890,10 @@ def container_builder_waveforms( self, rect, object_id_list ):
 
 # 6 is an offset so that black waveform image will be centered in the UIPanel
 #   note that the Panel's offset has changed slightly from Pygame-GUI 0.6.9 to 0.6.13
+#   note that the Panel's offset has changed back from Pygame-GUI 0.6.13 to 0.6.14
 #   new_window.image    = UIImage( relative_rect=pygame.Rect(1,1,10,10),
-    new_window.image    = UIImage( relative_rect=pygame.Rect(6,6,10,10),
+#   new_window.image    = UIImage( relative_rect=pygame.Rect(6,6,10,10),
+    new_window.image    = UIImage( relative_rect=pygame.Rect(1,1,10,10),
                              image_surface=new_window.surface,
                              manager=self.ui_manager,
                              container=new_window.panel );
@@ -6108,14 +6131,14 @@ def cmd_file_dialog( self, name, path, ext ):
   self.file_dialog = name;# The single handler needs to know the source
   # See https://github.com/MyreMylar/pygame_gui_examples/blob/master/file_dialog_test.py
   # WARNING: If object_id is not default "#file_dialog" the little widgets don't display
-  test_file =  UIFileDialog(rect=pygame.Rect(100, 100, 800, 500),
+  self.file_dialog_box =  UIFileDialog(rect=pygame.Rect(100, 100, 800, 500),
                      manager=self.ui_manager,
                      window_title=name,
                      object_id="#file_dialog", 
                      allow_picking_directories=True,
                      allowed_suffixes={ext},
                      initial_file_path=path  );
-  test_file.show();
+  self.file_dialog_box.show();
   return;
 
 
@@ -10332,6 +10355,7 @@ def init_globals( self ):
   self.thread_id_en = False;
 # self.screen_shot = False;
   self.file_dialog = None;# "load_pizza", "save_pizza", "source_script", "load_uut"
+  self.file_dialog_box = None;
   self.tool_tip_obj = None;# object_id of hovered button
   self.tool_top_tick_time = None;# PyGame tick_time in mS that hover event happened
   self.path_to_uut = None;# Note, this is selected UUTs file path, not the env var sump_path_uut
@@ -11083,8 +11107,9 @@ def signal_attribute_inheritance( self, my_sig ):
 #   for each_view in self.view_applied_list:
 #     if each_view      == my_sig.view_obj:
     if True:
-      if True:
-        each_view = my_sig.view_obj;
+#     if True:
+      each_view = my_sig.view_obj;
+      if each_view != None:
         if len( each_view.user_ctrl_list ) != 0:
           for each_user_ctrl in each_view.user_ctrl_list:
             if each_user_ctrl not in my_sig.user_ctrl_list:
@@ -11098,16 +11123,16 @@ def signal_attribute_inheritance( self, my_sig ):
 #       if each_group      == my_sig.member_of:
     if True:
       if True:
-        if True:
-          each_group = my_sig.member_of;
+        each_group = my_sig.member_of;
+        if each_group != None:
           if each_group.color != None:
             my_sig.color = each_group.color;
   if my_sig.color == None:
 #   for each_view in self.view_applied_list:
 #     if each_view      == my_sig.view_obj:
     if True:
-      if True:
-        each_view = my_sig.view_obj;
+      each_view = my_sig.view_obj;
+      if each_view != None:
         if each_view.color != None:
           my_sig.color = each_view.color;
   if my_sig.color == None:
@@ -14237,6 +14262,9 @@ def adjust_color( color_in, percent ):
 def proc_key( self, event ):
   rts = False;
 
+  if self.file_dialog_box and not self.file_dialog_box.alive():
+    self.file_dialog = None;# User must have hit <CANCEL>
+
   analog_signals_selected = False;
   for each_signal in self.signal_list:
     if each_signal.selected and each_signal.type == "analog":
@@ -14475,6 +14503,22 @@ def proc_key( self, event ):
         my_win.zoom_pan_list = my_win.zoom_pan_history.pop();
         self.refresh_waveforms = True;
         rts = True;# Force a refresh
+
+  # K_SPACE : Expand/Collapse group
+  elif event.key == pygame.K_SPACE:
+    # K_SPACE is used in bd_shell for typing, so ignore if console is visible
+    if ( self.file_dialog == None and self.window_selected != None and
+         not self.cmd_console.visible ):
+      for each_signal in self.signal_list:      
+        if each_signal.collapsable and each_signal.selected:
+          each_signal.collapsed = not each_signal.collapsed;
+          # Now find any children and change their visibility
+          if each_signal.collapsed:
+            proc_collapse_group(self, each_signal );
+          else:
+            proc_expand_group(self, each_signal );
+      self.refresh_waveforms = True;
+      rts = True;# Force a refresh
 
   # K_t   : Toggle trigger attribute of selected
   elif event.key == pygame.K_t:
