@@ -179,6 +179,10 @@
 # 2025.09.04 : Tweaked image offsets in container_builder_waveforms() to align with > 0.6.14 changes.
 # 2025.09.04 : ScrollUp and ScrollDown buttons added for those missing a mouse scroll wheel.
 # 2025.09.04 : K_SPACE does expland/collapse toggle.
+# 2025.09.23 : Added some protection against corrupted View ROMs in parse_view_rom()
+# 2025.09.25 : Added support for " " space in file names from File Open dialog box. 
+# 2025.09.25 : Added gui_width and gui_height buttons for GUI resizing without mouse.
+# 2025.09.25 : Fixed 5150 roll bug in create_sump_digital_slow()
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -235,11 +239,11 @@ from collections import deque
 # https://pygame-gui.readthedocs.io/en/v_067/index.html
 # python -m pip install pygame-gui
 
-print("Importing module PyGame");
-import pygame;
-print ( pygame.__version__ );
-print("Importing module PyGame-GUI");
-import pygame_gui;
+#print("Importing module PyGame");
+#import pygame;
+#print ( pygame.__version__ );
+#print("Importing module PyGame-GUI");
+#import pygame_gui;
 #import importlib.metadata;
 #print( importlib.metadata.version(pygame_gui) );
 #print ( pygame_gui.__version__ );
@@ -312,7 +316,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.09.04";
+    self.vers = "2025.09.25";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -463,6 +467,9 @@ class main:
 
       # VIDEORESIZE
       if event.type == pygame.VIDEORESIZE:
+        (w1,h1) = self.screen.get_size();
+        (w2,h2) = event.size
+        print( w1,h1, w2, h2 );
         self.screen= pygame.display.set_mode(event.dict['size'], pygame.RESIZABLE );
         screen_get_size(self);
         screen_set_size(self);
@@ -1017,7 +1024,9 @@ class main:
 
       if event.type == pygame_gui.UI_FILE_DIALOG_PATH_PICKED:
         if self.file_dialog != None:
-          cmd_str = self.file_dialog + " " + event.text;# ie "load_pza foo.pza"
+          file_name = event.text;
+          file_name = file_name.replace(" ","[SPACE]");
+          cmd_str = self.file_dialog + " " + file_name;# ie "load_pza foo.pza"
           self.file_dialog = None;
           screen_erase(self);# Popup doesn't clean itself up
           proc_cmd( self, cmd_str );
@@ -2130,16 +2139,18 @@ def display_text_stats( self ):
       acq_list += ["UUT not defined"];
     else:
       acq_list += [ "UUT = %s" % self.vars["uut_name"] ];
+#     acq_list += [ "%s@%s" % (self.vars["uut_name"], self.vars["bd_server_ip"]) ];
 
     if self.sump_connected:
-      hw_cfg = "HW Config  =";
-      if self.sump.cfg_dict['dig_hs_enable'] == 1:
-        hw_cfg += " HS";
-      if self.sump.cfg_dict['ana_ls_enable'] == 1:
-        hw_cfg += " LS";
-      if self.sump.cfg_dict['rle_hub_num'] > 0:
-        hw_cfg += " RLE";
-      acq_list += [ hw_cfg ];
+      acq_list += [ "IP = %s" % self.vars["bd_server_ip"] ];
+#     hw_cfg = "HW Config  =";
+#     if self.sump.cfg_dict['dig_hs_enable'] == 1:
+#       hw_cfg += " HS";
+#     if self.sump.cfg_dict['ana_ls_enable'] == 1:
+#       hw_cfg += " LS";
+#     if self.sump.cfg_dict['rle_hub_num'] > 0:
+#       hw_cfg += " RLE";
+#     acq_list += [ hw_cfg ];
 
       ( stat_str, status ) = self.sump.status;
       if self.status_downloading:
@@ -3088,6 +3099,8 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Views.#CutSig"            : cmd_str = "cut_signal";
   elif id_str == "#Controls.#Views.#Font++"            : cmd_str = "font_larger";
   elif id_str == "#Controls.#Views.#Font--"            : cmd_str = "font_smaller";
+  elif id_str == "#Controls.#Views.#GUI_Width"         : cmd_str = "gui_width";
+  elif id_str == "#Controls.#Views.#GUI_Height"        : cmd_str = "gui_height";
 
 # elif id_str == "#Controls.#Display.#MaskSig"         : cmd_str = "mask_toggle_signal";
 # elif id_str == "#Controls.#Display.#HideSig"         : cmd_str = "hide_toggle_signal";
@@ -4453,6 +4466,9 @@ def init_display(self):
   self.screen_width  = int( self.vars["screen_width"], 10 );
   self.screen_height = int( self.vars["screen_height"], 10 );
   pygame.init();
+  monitor_dimensions = pygame.display.Info();
+  self.monitor_width =  monitor_dimensions.current_w;
+  self.monitor_height = monitor_dimensions.current_h;
   self.pygame = pygame;
   self.pygame.display.set_caption(self.name + " " + self.vers + " " + self.copyright);
   self.screen = pygame.display.set_mode( (self.screen_width,self.screen_height), pygame.RESIZABLE );
@@ -4476,9 +4492,11 @@ def screen_set_size(self):
 # self.screen= pygame.display.set_mode(event.dict['size'], pygame.RESIZABLE );
 
   # Make Widescreen 16:9 SD the minimum allowed
-  if self.screen_width < 720 or self.screen_height < 576:
-    self.screen_width = 720;
-    self.screen_height = 576;
+# if self.screen_width < 720 or self.screen_height < 576:
+#   self.screen_width = 720;
+#   self.screen_height = 576;
+  if self.screen_height < 600:
+    self.screen_height = 600;
 
   self.screen = pygame.display.set_mode( (self.screen_width,self.screen_height), 
       pygame.RESIZABLE );
@@ -4795,7 +4813,8 @@ def init_widgets(self):
 #                     "ApplyAll",    "RemoveAll",
 #                                                ];
 
-  button_txt_list = [ "Font--",       "Font++",
+  button_txt_list = [ "GUI_Width",    "GUI_Height",
+                      "Font--",       "Font++",
                       "MaskSig",      "HideSig",     
                       "CopySig",      "PasteSig",     
                       "CutSig",       "DeleteSig",     
@@ -4893,10 +4912,23 @@ def container_builder_waveforms( self, rect, object_id_list ):
 #   note that the Panel's offset has changed back from Pygame-GUI 0.6.13 to 0.6.14
 #   new_window.image    = UIImage( relative_rect=pygame.Rect(1,1,10,10),
 #   new_window.image    = UIImage( relative_rect=pygame.Rect(6,6,10,10),
-    new_window.image    = UIImage( relative_rect=pygame.Rect(1,1,10,10),
-                             image_surface=new_window.surface,
-                             manager=self.ui_manager,
-                             container=new_window.panel );
+
+    # Certain versions of PyGame-GUI have offset problems. Unfortunately
+    # PyGame-GUI doesn't report a version number for itself.
+    # This hack is for a known PyGame-CE that has bad PyGame-GUI installed with it.
+#   if  pygame.__version__ != "2.5.5" and pygame.__version__ != "2.5.3":
+#     x_start = 1;
+#     y_start = 1;
+#   else:
+#     x_start = 6;# Fudge
+#     y_start = 6;
+    x_start = 3;
+    y_start = 3;
+
+    new_window.image = UIImage( relative_rect=pygame.Rect(x_start,y_start,10,10),
+                         image_surface=new_window.surface,
+                         manager=self.ui_manager,
+                         container=new_window.panel );
     self.window_list += [ new_window ];
 
   return;
@@ -6142,6 +6174,42 @@ def cmd_file_dialog( self, name, path, ext ):
   return;
 
 
+#####################################
+def cmd_gui_width( self, words ):
+  rts = [];
+# monitor_dimensions = pygame.display.Info();
+# self.monitor_width =  monitor_dimensions.current_w;
+# self.monitor_height = monitor_dimensions.current_h;
+# screen_get_size(self);
+  if ( self.screen_width +10 ) >= self.monitor_width:
+    self.screen_width = int( 0.33 * self.monitor_width);
+  else:
+    self.screen_width = int( self.screen_width * 1.5 );
+    if self.screen_width > self.monitor_width:
+      self.screen_width = self.monitor_width - 10;
+  screen_set_size(self);
+  self.refresh_waveforms = True;
+  log(self,["cmd_gui_width( %d x %d)" % (self.screen_width, self.screen_height) ]);
+  return rts;
+
+#####################################
+def cmd_gui_height( self, words ):
+  rts = [];
+# monitor_dimensions = pygame.display.Info();
+# self.monitor_width =  monitor_dimensions.current_w;
+# self.monitor_height = monitor_dimensions.current_h;
+# screen_get_size(self);
+  if ( self.screen_height+25 ) >= self.monitor_height:
+    self.screen_height = int( 0.33 * self.monitor_height);
+  else:
+    self.screen_height = int( self.screen_height * 1.5 );
+    if self.screen_height > self.monitor_height:
+      self.screen_height = self.monitor_height - 25;
+  screen_set_size(self);
+  self.refresh_waveforms = True;
+  log(self,["cmd_gui_height( %d x %d)" % (self.screen_width, self.screen_height) ]);
+  return rts;
+
 ########################################################
 def cmd_gui_refresh( self, words ):
   log( self, ["gui_refresh()"] );
@@ -6169,6 +6237,8 @@ def cmd_load_uut( self, words ):
 # rts = [];
   log( self, ["cmd_load_uut()"] );
   uut_ini_file = words[1];
+  uut_ini_file = uut_ini_file.replace("[SPACE]"," ");
+
   (file_path,filename) = os.path.split( uut_ini_file );
   log( self, [" file_path = %s , file_name = %s" % ( file_path, filename )] );
   self.path_to_uut = file_path;# Note this is different from var sump_path_uut
@@ -6382,7 +6452,7 @@ def log( self, txt_list ):
 ########################################################
 # Establish connection to Sump3 hardware
 def cmd_sump_connect( self ):
-  log( self, ["sump_connect()"] );
+  log( self, ["sump_connect( %s )" % self.vars["bd_server_ip"] ] );
   erase_old_sump_ram_files( self );
   time_start = time.time();
   txt = "Attempting to establish communication to hardware at %s : %d" % \
@@ -6455,12 +6525,12 @@ def cmd_sump_connect( self ):
   rts += ["bus_busy_bit_en = %01x" % self.sump.cfg_dict['bus_busy_bit_en' ]];
   rts += ["thread_lock_en  = %01x" % self.sump.cfg_dict['thread_lock_en' ]];
   rts += ["ana_ls_enable   = %01x" % self.sump.cfg_dict['ana_ls_enable']];
-  rts += ["dig_hs_enable   = %01x" % self.sump.cfg_dict['dig_hs_enable']];
+# rts += ["dig_hs_enable   = %01x" % self.sump.cfg_dict['dig_hs_enable']];
   rts += ["rle_hub_num     = %d"   % self.sump.cfg_dict['rle_hub_num']];
   rts += ["ana_ram_depth   = %dK"  % ( self.sump.cfg_dict['ana_ram_depth'] / 1024 )];
   rts += ["ana_ram_width   = %d"   % ( self.sump.cfg_dict['ana_ram_width'] *32 )];
-  rts += ["dig_ram_depth   = %dK"  % ( self.sump.cfg_dict['dig_ram_depth'] / 1024 )];
-  rts += ["dig_ram_width   = %d"   % ( self.sump.cfg_dict['dig_ram_width'] *32 )];
+# rts += ["dig_ram_depth   = %dK"  % ( self.sump.cfg_dict['dig_ram_depth'] / 1024 )];
+# rts += ["dig_ram_width   = %d"   % ( self.sump.cfg_dict['dig_ram_width'] *32 )];
   rts += ["view_rom_kb     = %dKb" % ( self.sump.cfg_dict['view_rom_kb'] )];
 
 # New 2023.08.23
@@ -8682,7 +8752,8 @@ def create_sump_digital_slow( self, file_in, file_out ):
 
 # list2file( "test1.txt", digital_list );
   dig_len = len(digital_list);
-  digital_list = 2*digital_list;# Concat
+# digital_list = 2*digital_list;# Concat
+  digital_list = 3*digital_list;# Concat 2025.09.25
 
   code_list = []
   for each in digital_list:
@@ -8717,7 +8788,7 @@ def create_sump_digital_slow( self, file_in, file_out ):
   code_list    = code_list[t:(t+dig_len)];
   new_len = len(digital_list);
   if dig_len != new_len:
-    log(self,["ERROR-5150 : LS sample roll operation complete systems failure"]);
+    log(self,["ERROR-5150 : LS sample roll operation complete systems failure %d  %d != %d" % ( t, new_len, dig_len) ]);
     digital_list = [];
 
   list2file( file_out, digital_list );
@@ -10074,7 +10145,12 @@ class sump3_hw:
   # Given a ROM byte list, parse one or more views from it
 # def parse_view_rom(self, rom_byte_list, hub, pod ):
   def parse_view_rom(self, rom_byte_list, hub, pod, inst ):
+    log( self.parent , [ "parse_view_rom()" ] );
     rts = [];
+    if ( rom_byte_list[0] != 0x00 or rom_byte_list[-1] != 0xE0 or 0xF0 not in rom_byte_list ):
+      log( self.parent , [ "ERROR: Invalid ROM. No leading 0x00, 0xF0 or trailing 0xE0" ] );
+      return rts;
+
     cmd_en   = True;
     ascii_en = False;
     byte_cnt = 0;# Number of Parm Bytes to parse next
@@ -10615,6 +10691,7 @@ def init_vars( self, file_ini ):
  ];
   
   # Now load an existing ini file and overwrite any defaults
+  file_ini = file_ini.replace("[SPACE]"," ");
   if os.path.exists( file_ini ):
     file_in   = open( file_ini, 'r' );
     file_list = file_in.readlines();
@@ -10649,6 +10726,7 @@ def init_vars( self, file_ini ):
 # Dump all the app variables to ini file when application quits.
 def var_dump( self, file_ini ):
 # log( self, ["var_dump()"] );
+  file_ini = file_ini.replace("[SPACE]"," ");
   file_out  = open( file_ini, 'w' );
   file_out.write( "# [" + file_ini + "]\n" );
   file_out.write( "# WARNING: \n");
@@ -10711,7 +10789,9 @@ def star_match( search_str, search_list ):
       d += [ each ];
   return d;
 
+
 def hexlist2file( file_name, my_list ):
+  file_name = file_name.replace("[SPACE]"," ");
   try:
     file_out  = open( file_name, 'w' );
   except:
@@ -10733,6 +10813,7 @@ def hexlist2file( file_name, my_list ):
 # Once in a blue moon file open() would fail - not even in concat mode
 # Trying a 2nd time seems to fix the issue. Odd.
 def list2file( file_name, my_list, concat = False ):
+  file_name = file_name.replace("[SPACE]"," ");
   if concat:
     type = 'a';
   else:
@@ -10743,16 +10824,23 @@ def list2file( file_name, my_list, concat = False ):
     print("ERROR: list2file %s. Trying again..." % file_name );
     import time;
     time.sleep(0.1);# Sleep 100ms
-    file_out  = open( file_name, type );
+    try:
+      file_out  = open( file_name, type );
+    except:
+      print("ERROR: list2file");
 
-  for each in my_list:
-    file_out.write( each + "\n" );
-  file_out.flush();# Forces write to disk prior to close. Useful for log files, etc
-  file_out.close();
+  try:
+    for each in my_list:
+      file_out.write( each + "\n" );
+    file_out.flush();# Forces write to disk prior to close. Useful for log files, etc
+    file_out.close();
+  except:
+    print("ERROR: list2file");
   return;
 
 
 def file2list( file_name, binary = False ):
+  file_name = file_name.replace("[SPACE]"," ");
   if ( binary == False ):
     try:
       file_in   = open ( file_name, 'r' );
@@ -10778,6 +10866,7 @@ def file2list( file_name, binary = False ):
 
 def filegz2list( file_name ):
   import gzip;
+  file_name = file_name.replace("[SPACE]"," ");
   list_out = [];
   with gzip.open( file_name, "rt" ) as file_in_gz:
     list_out = [ each.strip('\n').strip('\r') for each in file_in_gz ];
@@ -14251,6 +14340,8 @@ def cmd_font_smaller( self ):
   self.refresh_waveforms = True;
   return rts;
 
+
+
 #####################################
 def adjust_color( color_in, percent ):
   color_in.r = int( color_in.r * (1.0 + percent) );
@@ -14636,6 +14727,8 @@ def proc_cmd( self, cmd, quiet = False ):
   elif cmd_txt == "load_uut"          : rts = cmd_load_uut(self,words); valid = True;
   elif cmd_txt == "load_vcd"          : rts = cmd_load_vcd(self,words); valid = True;
   elif cmd_txt == "save_vcd"          : rts = cmd_save_vcd( self, words ); valid = True;
+  elif cmd_txt == "gui_width"         : rts = cmd_gui_width(self,words); valid = True;
+  elif cmd_txt == "gui_height"        : rts = cmd_gui_height(self,words); valid = True;
   elif cmd_txt == "gui_minimize"      : rts = cmd_gui_minimize(self,words); valid = True;
   elif cmd_txt == "gui_refresh"       : rts = cmd_gui_refresh(self,words); valid = True;
 # elif cmd_txt == "gui_fullscreen"    : rts = cmd_gui_fullscreen(self,words); valid = True;
