@@ -93,6 +93,7 @@
 -- 0.16  11.04.24  khubbard Rev01 Support for new hub param register at 0x3a
 -- 0.17  01.07.25  khubbard Rev01 Support user_bus access while armed.      
 -- 0.17  01.13.25  khubbard Rev01 Thread-Locking, Bus Busy Bit timer.    
+-- 0.18  10.04.25  khubbard Rev01 Burst Data option added for 31 DWORD bursts.
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 `timescale 1 ns/ 100 ps
@@ -104,7 +105,8 @@ module sump3_core #
    parameter ana_ram_depth_bits = 10,
    parameter ana_ram_width      = 32, // Record width. Must be 32.
    parameter thread_lock_en     = 1,
-   parameter bus_busy_timer_en  = 1,    // Set 1 to enable bus busy timer
+   parameter bus_busy_timer_en  = 1,  // Set 1 to enable bus busy timer
+   parameter data_burst_en      = 0,  // Set 1 for 31 DWORD lb_cs_data mapping
    parameter bus_busy_timer_len = 1023, // Number of bus clocks to wait 
 
    parameter rle_hub_num        = 1,  // Number of RLE Hubs (Clock Domains)
@@ -823,11 +825,26 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
   end
 end // proc_lb_rd
 
+//-----------------------------------------------------------------------------
+// RE data_burst_en : Nominally, lb_cs_data is mapped to a single DWORD in 
+// address space immediately following lb_cs_ctrl. This works fine for fast 
+// PCIe bus interfacing and also bd_server and 1 Mbps FT232 serial. This single
+// DWORD of data does not work well with JTAG and openocd however. A 64Kb RLE 
+// pod RAM which takes 1 second to download over FT232 takes 36 seconds with a
+// Segger Jlink and 26 seconds with a Digilent HS2. Mapping lb_cs_data into 
+// 31 DWORDs of address instead of just 1 DWORD of address reduces the JTAG 
+// download time to just over 2 seconds.
+// Example mapping:
+//  lb_cs_ctrl = 0x1000_0100
+//  lb_cs_data = 0x1000_0104 - 0x1000_01FC
+//-----------------------------------------------------------------------------
 
   assign ctrl_0b_status[31:24] = sump_id;// Identification
   assign ctrl_0b_status[23:16] = sump_rev;// Revision
   assign ctrl_0b_status[15:8]  = rle_hub_num;
-  assign ctrl_0b_status[7:5]   = 0;
+//assign ctrl_0b_status[7:5]   = 0;
+  assign ctrl_0b_status[7:6]   = 0;
+  assign ctrl_0b_status[5]     = data_burst_en;// Supports 31 DWORDs of data burst
   assign ctrl_0b_status[4]     = bus_busy_timer_en;
   assign ctrl_0b_status[3]     = thread_lock_en;
   assign ctrl_0b_status[2]     = view_rom_en;

@@ -183,6 +183,9 @@
 # 2025.09.25 : Added support for " " space in file names from File Open dialog box. 
 # 2025.09.25 : Added gui_width and gui_height buttons for GUI resizing without mouse.
 # 2025.09.25 : Fixed 5150 roll bug in create_sump_digital_slow()
+# 2025.09.29 : Fixed class sump_virtual() missing support for Verilog generate instances.
+# 2025.09.29 : Fixed crash in display_raw_text() from undefined txt.
+# 2025.10.04 : Added class OpenOCD() for JTAG openocd support.
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -316,7 +319,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.09.25";
+    self.vers = "2025.10.05";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -1274,8 +1277,9 @@ class main:
     spinner = "|";
     while self.running:
       # check for input
-      self.process_events()
+      self.process_events();# Ubuntu is crashing here with: XIO: fatal IO error 0 (Success) on X server "localhost:12.0"
       self.ui_manager.update( time_delta = 0 );
+
       if self.mode_acquire and self.sump_connected:
         spinner = rotate_spinner( spinner );
         self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" HW Status: Waiting for trigger " + spinner);
@@ -2505,6 +2509,7 @@ def proc_acq_adj( self, step ):
 # a (x,y,w,h) tuple of the rectangle area that the text occupies
 # bold_i is the selected text line, if any, that the user may modify value.
 def display_raw_text( self, txt_list, extra_txt_list, position, bold_i ):
+  txt = None;
   (x,y) = position;
   x1 = x;
   y1 = y + self.txt_toolbar_height/3;
@@ -2523,8 +2528,9 @@ def display_raw_text( self, txt_list, extra_txt_list, position, bold_i ):
       self.screen.blit(txt, (x1,y1) );
     y1 += self.txt_toolbar_height;
     h += self.txt_toolbar_height;
-    if txt.get_width() > w:
-      w = txt.get_width();
+    if txt != None:
+      if txt.get_width() > w:
+        w = txt.get_width();
   return ( x,y,w,h);
 
 
@@ -2853,193 +2859,6 @@ def mouse_get_zone( self ):
   return ( wave_win, win_reg );
 
 
-###############################################################################
-# Convert Button object_id to tool tip string
-def convert_object_id_to_tool_tip( self, id_str ):
-# print( id_str );
-  cmd_str = None;
-  if id_str == "#Controls.#Main.#Exit"                 : cmd_str = "exit";
-  elif id_str == "#Controls.#Main.#Acquisition"        : cmd_str = "acquisition";
-  elif id_str == "#Controls.#Main.#Display"            : cmd_str = "display";
-  elif id_str == "#Controls.#Main.#Views"              : cmd_str = "views";   
-  elif id_str == "#Controls.#Main.#Help"               : cmd_str = "help";
-  elif id_str == "#Controls.#Acquisition.#Arm"         : cmd_str = "sump_arm";
-  elif id_str == "#Controls.#Acquisition.#Acquire"     : cmd_str = "sump_acquire";
-  elif id_str == "#Controls.#Acquisition.#Connect"     : cmd_str = "sump_connect";
-  elif id_str == "#Controls.#Acquisition.#Download"    : cmd_str = "sump_download";
-  elif id_str == "#Controls.#Acquisition.#Query"       : cmd_str = "sump_query";
-  elif id_str == "#Controls.#Acquisition.#Force_Trig"  : cmd_str = "sump_force_trig";
-  elif id_str == "#Controls.#Acquisition.#Set_Trigs"   : cmd_str = "sump_set_trigs";
-# elif id_str == "#Controls.#Acquisition.#Clr_Trigs"   : cmd_str = "sump_clr_trigs";
-  elif id_str == "#Controls.#Acquisition.#Clear_Trigs" : cmd_str = "sump_clear_trigs";
-  elif id_str == "#Controls.#Acquisition.#Force_Stop"  : cmd_str = "sump_force_stop";
-  elif id_str == "#Controls.#Acquisition.#Save_PZA"    : cmd_str = "save_pza";
-  elif id_str == "#Controls.#Acquisition.#Load_PZA"    : cmd_str = "load_pza";
-  elif id_str == "#Controls.#Acquisition.#Save_VCD"    : cmd_str = "save_vcd";
-  elif id_str == "#Controls.#Acquisition.#Load_VCD"    : cmd_str = "load_vcd";
-# elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
-# elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
-  elif id_str == "#Controls.#Acquisition.#Save_List"   : cmd_str = "save_list";
-  elif id_str == "#Controls.#Acquisition.#Save_View"   : cmd_str = "save_view";
-
-# elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
-# elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
-# elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
-# elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
-
-  elif id_str == "#Controls.#Acquisition.#UUT"         : cmd_str = "load_uut";
-  elif id_str == "#Controls.#Acquisition.#Target"      : cmd_str = "load_uut";
-  elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
-  elif id_str == "#Controls.#Views.#RemoveAll"         : cmd_str = "remove_view_all";
-  elif id_str == "#Controls.#Display.#Window-1"        : cmd_str = "window1";
-  elif id_str == "#Controls.#Display.#Window-2"        : cmd_str = "window2";
-  elif id_str == "#Controls.#Display.#Window-3"        : cmd_str = "window3";
-  elif id_str == "#Controls.#Display.#bd_shell"        : cmd_str = "bd_shell";
-  elif id_str == "#Controls.#Display.#Cursor-1"        : cmd_str = "cursor1";
-  elif id_str == "#Controls.#Display.#Cursor-2"        : cmd_str = "cursor2";
-  elif id_str == "#Controls.#Display.#ZoomIn"          : cmd_str = "zoom_in";
-  elif id_str == "#Controls.#Display.#ZoomOut"         : cmd_str = "zoom_out";
-  elif id_str == "#Controls.#Display.#ZoomCurs"        : cmd_str = "zoom_to_cursors";
-  elif id_str == "#Controls.#Display.#ZoomFull"        : cmd_str = "zoom_full";
-  elif id_str == "#Controls.#Display.#<-Search"        : cmd_str = "search_backward";
-  elif id_str == "#Controls.#Display.#Search->"        : cmd_str = "search_forward";
-  elif id_str == "#Controls.#Display.#<-Pan"           : cmd_str = "pan_left";
-  elif id_str == "#Controls.#Display.#Pan->"           : cmd_str = "pan_right";
-  elif id_str == "#Controls.#Display.#ScrollUp"        : cmd_str = "scroll_up";
-  elif id_str == "#Controls.#Display.#ScrollDown"      : cmd_str = "scroll_down";
-# elif id_str == "#Controls.#Display.#Save_PNG"        : cmd_str = "save_png";
-# elif id_str == "#Controls.#Display.#Save_JPG"        : cmd_str = "save_jpg";
-# elif id_str == "#Controls.#Display.#Save_List"       : cmd_str = "save_list";
-# elif id_str == "#Controls.#Display.#Save_View"       : cmd_str = "save_view";
-# elif id_str == "#Controls.#Display.#Save_VCD"        : cmd_str = "save_vcd";
-  elif id_str == "#Controls.#Display.#TimeSnap"        : cmd_str = "time_snap";
-  elif id_str == "#Controls.#Display.#TimeLock"        : cmd_str = "time_lock";
-
-  elif id_str == "#Controls.#Display.#MaskSig"         : cmd_str = "mask_toggle_signal";
-  elif id_str == "#Controls.#Display.#HideSig"         : cmd_str = "hide_toggle_signal";
-  elif id_str == "#Controls.#Display.#CopySig"         : cmd_str = "copy_signal";
-  elif id_str == "#Controls.#Display.#PasteSig"        : cmd_str = "paste_signal";
-  elif id_str == "#Controls.#Display.#DeleteSig"       : cmd_str = "delete_signal";
-  elif id_str == "#Controls.#Display.#CutSig"          : cmd_str = "cut_signal";
-  elif id_str == "#Controls.#Display.#Font++"          : cmd_str = "font_larger";
-  elif id_str == "#Controls.#Display.#Font--"          : cmd_str = "font_smaller";
-
-# elif id_str == "#Controls.#Display.#InsertSig"       : cmd_str = "insert_signal";
-# elif id_str == "#Controls.#Display.#CloneSig"        : cmd_str = "clone_signal";
-
-  rts = []; text = None;
-  if cmd_str == "help":
-    text = "View a Sump3 manual using an external text editor";
-  elif cmd_str == "acquisition":
-    text = "Enable the Acquisition controls for connecting to Sump3 hardware, "+ \
-           "specifying triggers, arming and downloading acquisitions.";
-  elif cmd_str == "views":
-    text = "Enable the Views controls for adding and removing signal views from "+ \
-           "waveform windows.";
-  elif cmd_str == "display":
-    text = "Enable the Display controls for viewing acquired signal samples.";
-
-  elif cmd_str in [ "window1", "window2", "window3" ]:
-    text = "Toggle the waveform Window for being displayed. <PageUp> and <PageDown> " +\
-           "may be used to rapidly rotate through all three waveform windows.";
-
-  elif cmd_str == "bd_shell":
-    text = "Toggle the bd_shell CLI for being displayed.";
-  elif cmd_str == "cursor1":
-    text = "Toggle Cursor-1 for being displayed.";
-  elif cmd_str == "cursor2":
-    text = "Toggle Cursor-2 for being displayed.";
-
-  elif cmd_str == "sump_arm":
-    text = "Connect to Sump3 hardware and arm for triggering.";
-  elif cmd_str == "sump_connect":
-    text = "Connect to Sump3 hardware and retrieve configuration.";
-  elif cmd_str == "sump_query":
-    text = "Connect to Sump3 hardware and retrieve trigger status.";
-  elif cmd_str == "sump_acquire":
-    text = "Arm Sump3 hardware, query until triggered and download samples.";
-  elif cmd_str == "sump_download":
-    text = "Connect to Sump3 hardware and download acquired samples.";
-  elif cmd_str == "sump_force_trig":
-    text = "Connect to Sump3 hardware and issue an asynch software trigger.";
-  elif cmd_str == "sump_set_trigs":
-    text = "Set selected signal(s) as triggers.";
-  elif cmd_str == "sump_clr_trigs":
-    text = "Clear any previously set triggers.";
-  elif cmd_str == "sump_force_stop":
-    text = "Connect to Sump3 hardware and cancel armed state without acquisition.";
-  elif cmd_str == "save_pza":
-    text = "Create and save a single *.PZA file which contains current hardware " + \
-           "configuration and downloaded samples.";
-  elif cmd_str == "load_pza":
-    text = "Load a saved *.PZA file of a previous acquisition.";
-  elif cmd_str == "load_uut":
-    text = "Load an *.INI file which specifies the 32bit address of the Sump3 hardware "+\
-           "for the Unit Under Test.";
-  elif cmd_str == "zoom_in":
-    text = "Zoom In on current selected waveform window in time. Also <UpArrow> key.";
-  elif cmd_str == "zoom_out":
-    text = "Zoom Out on current selected waveform window in time. Also <DownArrow> key.";
-  elif cmd_str == "zoom_to_cursors":
-    text = "Zoom to time region specified by C1 and C2 cursors.";
-  elif cmd_str == "zoom_full":
-    text = "Zoom out completely in selected waveform window.";
-  elif cmd_str == "search_backward":
-    text = "Search backward in time for previous transition of selected signal.";
-  elif cmd_str == "search_forward":
-    text = "Search forward in time for next transition of selected signal.";
-  elif cmd_str == "pan_left":
-    text = "Pan left in time to earlier samples. Also <LeftArrow> key.";
-  elif cmd_str == "pan_right":
-    text = "Pan right in time to later samples. Also <RightArrow> key.";
-  elif cmd_str == "save_png":
-    text = "Save a *.PNG image file of either selected waveform window or entire GUI.";
-  elif cmd_str == "save_vcd":
-    text = "Save a *.VCD Verilog Value-Change-Dump of selected waveform window.";
-  elif cmd_str == "save_list":
-    text = "Save a text *.LST 'List' of selected waveform window time samples.";
-  elif cmd_str == "save_view":
-    text = "Save a single view file of selected waveform window.";
-  elif cmd_str == "time_snap":
-    text = "Snap all windows to same time (pan) and zoom settings. All Pan and Zoom " +\
-           "commands will continue to only apply to the selected window.";
-  elif cmd_str == "time_lock":
-    text = "Lock all windows to have a single time and zoom setting. With TimeLock on " +\
-           "all Pan and Zoom commands will be applied to all windows.";
-  elif cmd_str == "mask_toggle_signal":
-    text = "Toggle <END> the RLE Mask attribute of selected signal. An RLE signal that is " +\
-           "masked will not be captured, increasing the RLE compression for other signals.";
-  elif cmd_str == "hide_toggle_signal":
-    text = "Toggle the hide attribute of selected signal. A signal that is hidden will " +\
-           "have only its name displayed and no waveform.";
-  elif cmd_str == "delete_signal":
-    text = "Delete <DEL> the selected signal from the waveform display. Pressing <HOME> will " +\
-           "restore ALL previously deleted signals. Pressing <INS> will insert last deleted.";
-  elif cmd_str == "copy_signal":
-    text = "Copy the selected signal from the waveform window into clipboard buffer.";
-  elif cmd_str == "paste_signal":
-    text = "Paste the signal from the clipboard buffer into the selected waveform window.";
-  elif cmd_str == "cut_signal":
-    text = "Cut the signal into the clipboard buffer.";
-# elif cmd_str == "insert_signal":
-#   text = "Insert <INS> the last deleted signal to the waveform display.";
-  elif cmd_str == "font_larger":
-    text = "Increase the font size of signal names.";
-  elif cmd_str == "font_smaller":
-    text = "Decrease the font size of signal names.";
-
-  # This RegEx function parses a single sentence into a list of words that 
-  # don't exceed a specified character width. There's a conversion from pels to chars
-  # based on current selected font size.
-  if text != None and cmd_str != None:
-    # print( dir( self.container_list[1] ) );
-    #print( self.container_list[1].get_relative_rect() );
-    (x,y,right_w,h) = self.container_list[1].get_relative_rect();# 275 expected
-    max_chars_per_line = int( ( right_w / self.txt_width ) - 2 ) ;
-    rts += [ "Command: %s" % cmd_str ]; 
-    regex_str = r'.{1,%d}(?:\s+|$)' % max_chars_per_line;
-    rts += re.findall( regex_str, text );
-  return rts;
 
 ###############################################################################
 # Convert Button object_id to internal command line commands
@@ -6181,12 +6000,13 @@ def cmd_gui_width( self, words ):
 # self.monitor_width =  monitor_dimensions.current_w;
 # self.monitor_height = monitor_dimensions.current_h;
 # screen_get_size(self);
-  if ( self.screen_width +10 ) >= self.monitor_width:
+  margin = 15;
+  if ( self.screen_width + margin ) >= self.monitor_width:
     self.screen_width = int( 0.33 * self.monitor_width);
   else:
     self.screen_width = int( self.screen_width * 1.5 );
-    if self.screen_width > self.monitor_width:
-      self.screen_width = self.monitor_width - 10;
+    if ( self.screen_width + margin ) >= self.monitor_width:
+      self.screen_width = self.monitor_width - margin;
   screen_set_size(self);
   self.refresh_waveforms = True;
   log(self,["cmd_gui_width( %d x %d)" % (self.screen_width, self.screen_height) ]);
@@ -6199,12 +6019,13 @@ def cmd_gui_height( self, words ):
 # self.monitor_width =  monitor_dimensions.current_w;
 # self.monitor_height = monitor_dimensions.current_h;
 # screen_get_size(self);
-  if ( self.screen_height+25 ) >= self.monitor_height:
+  margin = 25;
+  if ( self.screen_height + margin ) >= self.monitor_height:
     self.screen_height = int( 0.33 * self.monitor_height);
   else:
     self.screen_height = int( self.screen_height * 1.5 );
-    if self.screen_height > self.monitor_height:
-      self.screen_height = self.monitor_height - 25;
+    if ( self.screen_height + margin ) >= self.monitor_height:
+      self.screen_height = self.monitor_height - margin;
   screen_set_size(self);
   self.refresh_waveforms = True;
   log(self,["cmd_gui_height( %d x %d)" % (self.screen_width, self.screen_height) ]);
@@ -6455,24 +6276,45 @@ def cmd_sump_connect( self ):
   log( self, ["sump_connect( %s )" % self.vars["bd_server_ip"] ] );
   erase_old_sump_ram_files( self );
   time_start = time.time();
-  txt = "Attempting to establish communication to hardware at %s : %d" % \
-        ( self.vars["bd_server_ip"], int( self.vars["bd_server_socket"], 10 ));
-  log( self, [ txt ] );
 
   rts = [];
 # self.bd=Backdoor(  self.vars["bd_server_ip"],
 #                    int( self.vars["bd_server_socket"], 10 ) );# Note dec
-  self.bd=Backdoor(  self,
-                     self.vars["bd_server_ip"],
-                     int( self.vars["bd_server_socket"], 10 ),
-                     int( self.vars["aes_key"], 16 ),          
-                     int( self.vars["aes_authentication"], 10 ) 
-                  );
+# self.bd=Backdoor(  self,
+#                    self.vars["bd_server_ip"],
+#                    int( self.vars["bd_server_socket"], 10 ),
+#                    int( self.vars["aes_key"], 16 ),          
+#                    int( self.vars["aes_authentication"], 10 ) 
+#                 );
+
+  # "tcp" is deprecated, use "bd_server" instead
+  if self.vars["bd_connection"] == "tcp" or \
+     self.vars["bd_connection"] == "bd_server":
+    txt = "Attempting to establish communication to hardware at %s : %d" % \
+        ( self.vars["bd_server_ip"], int( self.vars["bd_server_socket"], 10 ));
+    log( self, [ txt ] );
+    self.bd=Backdoor(  self,
+                       self.vars["bd_server_ip"],
+                       int( self.vars["bd_server_socket"], 10 ),
+                       int( self.vars["aes_key"], 16 ),
+                       int( self.vars["aes_authentication"], 10 )
+                    );
+  elif self.vars["bd_connection"] == "openocd":
+    txt = "Attempting to establish communication to hardware via openocd at %s : %d %d" % \
+        ( self.vars["openocd_ip"], int( self.vars["openocd_socket"], 10 ),  
+                                   int( self.vars["openocd_telnet"], 10 ));
+    log( self, [ txt ] );
+    self.bd=OpenOCD(  self,
+                       self.vars["openocd_ip"],
+                       int( self.vars["openocd_socket"], 10 ),
+                       int( self.vars["openocd_telnet"], 10 ),
+                    );
+  else:
+    log( self, ["ERROR cmd_sump_connect() Invalid bd_connection %s" % self.vars["bd_connection"]  ] );
+
 
   if ( self.bd.sock == None ):
-    a = self.vars["bd_server_ip"];
-    b = self.vars["bd_server_socket"];
-    txt = "cmd_sump_connect(): ERROR: Unable to connect to BD_SERVER : Socket %s : IP %s" % (b,a);
+    txt = "cmd_sump_connect(): ERROR: Unable to connect to hardware";
     log( self, [ txt ] );
     return rts;
 
@@ -6517,11 +6359,17 @@ def cmd_sump_connect( self ):
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
   self.pygame.event.pump();
 
+# if self.sump.cfg_dict['data_burst_en' ] == 0:
+#   self.bd.data_burst_len = 1;
+# else:
+#   self.bd.data_burst_len = 31;
+
 # rts += ["hw_id         = %04x" % self.sump.cfg_dict['hw_id']];
   rts += ["--------------------------------------------------"];
   rts += ["hw_id           = %02x" % self.sump.cfg_dict['hw_id']];
   rts += ["hw_rev          = %02x" % self.sump.cfg_dict['hw_rev']];
   rts += ["view_rom_en     = %01x" % self.sump.cfg_dict['view_rom_en'  ]];
+  rts += ["data_burst_en   = %01x" % self.sump.cfg_dict['data_burst_en' ]];
   rts += ["bus_busy_bit_en = %01x" % self.sump.cfg_dict['bus_busy_bit_en' ]];
   rts += ["thread_lock_en  = %01x" % self.sump.cfg_dict['thread_lock_en' ]];
   rts += ["ana_ls_enable   = %01x" % self.sump.cfg_dict['ana_ls_enable']];
@@ -7927,11 +7775,18 @@ def sump_read_config( self ):
   a['hw_id']                 = ( hwid_data & 0xFF000000 ) >> 24;
   a['hw_rev']                = ( hwid_data & 0x00FF0000 ) >> 16;
   a['rle_hub_num']           = ( hwid_data & 0x0000FF00 ) >> 8;
+  a['data_burst_en']         = ( hwid_data & 0x00000020 ) >> 5;
   a['bus_busy_bit_en']       = ( hwid_data & 0x00000010 ) >> 4;
   a['thread_lock_en']        = ( hwid_data & 0x00000008 ) >> 3;
   a['view_rom_en']           = ( hwid_data & 0x00000004 ) >> 2;
   a['ana_ls_enable']         = ( hwid_data & 0x00000002 ) >> 1;
   a['dig_hs_enable']         = ( hwid_data & 0x00000001 ) >> 0;
+
+  if a['data_burst_en' ] == 0:
+    self.bd.data_burst_len = 1;
+  else:
+    log( self,["Switching data_burst_len from 1 DWORD to 31 DWORDs"]);
+    self.bd.data_burst_len = 31;
 
   if a['hw_id'] != self.sump.hw_id:
     return False;
@@ -8042,6 +7897,7 @@ def sump_ram2file( self, ram_type, file_name ):
 # Download RLE RAM to a file
 def sump_rleram2file( self ):
   log( self,["sump_rleram2file()"]);
+  start_time = self.pygame.time.get_ticks();
   rts = [];
   for (i,each_pod_list) in enumerate( self.sump.rle_hub_pod_list ):
     for (j,each_pod) in enumerate( each_pod_list ):
@@ -8049,6 +7905,9 @@ def sump_rleram2file( self ):
       rts += sump_rlepod_placeholder(self, hub_num=i, pod_num=j );
 #     rts += sump_rlepod_download(self, hub_num=i,pod_num=j,download_en=False);
 # rts += sump_rlepod_download(self, hub_num=0,pod_num=0);
+  stop_time = self.pygame.time.get_ticks();
+  render_time = stop_time - start_time;
+  log( self,["sump_rleram2file() download time = %s ms" % render_time]);
   return rts;
 
 ########################################################
@@ -8076,6 +7935,7 @@ def sump_rlepod_placeholder( self, hub_num, pod_num ):
 # Given the Hub and Pod number, download a single RLE Pod if needed
 # If it isn't needed, return None
 def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
+  start_time = self.pygame.time.get_ticks();
   log( self,["sump_rlepod_download()"]);
   self.pygame.display.set_caption(\
     self.name+" "+self.vers+" "+self.copyright+" sump_rlepod_download()");
@@ -8295,6 +8155,9 @@ def sump_rlepod_download( self, hub_num, pod_num, rle_ram_list ):
 # pod_txt_list +=[ ("#[rle_pod_stop]")];
 
   new_rle_ram_list = rle_ram_list[0:insert_line] + pod_txt_list + rle_ram_list[insert_line+1:];
+  stop_time = self.pygame.time.get_ticks();
+  render_time = stop_time - start_time;
+  log( self,["  download time = %d ms" % render_time ] );
   return new_rle_ram_list;
 
 
@@ -8813,6 +8676,7 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
   ls_list = [];
   hs_list = [];
   rle_list = [];
+  log_str = [];
   
   self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright+" create_signal_values_digital() Reading Files...");
   self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
@@ -9151,10 +9015,9 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
         each_sig.sample_period = 1;
         each_sig.sample_unit = "ps";
 
-      log_str = [];
-#     log_str +=["%s -type %s samples = %d " % \
-#               ( each_sig.name, each_sig.type, len( each_sig.values ))];
-      log( self, log_str );
+      log_str +=["create_signal_values_digital() : %s -source %s -type %s num_samples = %d " % \
+                ( each_sig.name, each_sig.source, each_sig.type, len( each_sig.values ))];
+  log( self, log_str );
   self.pygame.display.set_caption( self.name+" "+self.vers+" "+self.copyright);
   self.pygame.time.wait( 0 );# Try to avoid timeout spinner during long downloads
   self.pygame.event.pump();
@@ -9351,6 +9214,8 @@ class sump_virtual:
       j = int( words[1], 10 );# Pod 0-255
       words = hub_pod_name.split(".") + [None] * 8; # Avoid IndexError
       self.rle_hub_pod_dict[ words[2]+"."+words[5] ] = (i,j);
+      # For generates with instances, add "clk_100.u2_pod.0] 2025.09.29
+      self.rle_hub_pod_dict[ words[2]+"."+words[5]+"."+words[4] ] = (i,j);
     return;
   def wr ( self, cmd, data ):
     return;
@@ -9362,6 +9227,7 @@ class sump_virtual:
 #   self.cfg_dict['hw_id']       = ( hwid_data & 0xFFFF0000 ) >> 16;
   def close ( self ):
     return;
+
 
 ##############################################################################
 class sump3_hw:
@@ -9568,6 +9434,7 @@ class sump3_hw:
     self.cfg_dict['hw_id']           = ( hwid_data & 0xFF000000 ) >> 24;
     self.cfg_dict['hw_rev']          = ( hwid_data & 0x00FF0000 ) >> 16;
     self.cfg_dict['rle_hub_num']     = ( hwid_data & 0x0000FF00 ) >> 8;
+    self.cfg_dict['data_burst_en']   = ( hwid_data & 0x00000020 ) >> 5;
     self.cfg_dict['bus_busy_bit_en'] = ( hwid_data & 0x00000010 ) >> 4;
     self.cfg_dict['thread_lock_en']  = ( hwid_data & 0x00000008 ) >> 3;
     self.cfg_dict['view_rom_en']     = ( hwid_data & 0x00000004 ) >> 2;
@@ -9577,6 +9444,13 @@ class sump3_hw:
     # If we can't read the hw_id then we have nothing. Hard stop.
     if self.cfg_dict['hw_id'] != self.hw_id :
       return False;
+
+    if self.cfg_dict['data_burst_en' ] == 0:
+      self.bd.data_burst_len = 1;
+    else:
+#     log( self,["Switching data_burst_len from 1 DWORD to 31 DWORDs"]);
+      print("Switching data_burst_len from 1 DWORD to 31 DWORDs");
+      self.bd.data_burst_len = 31;
 
     if self.cfg_dict['ana_ls_enable'] == 1:
       ana_ram_data  = self.rd( self.cmd_rd_ana_ram_width_len )[0];
@@ -10261,6 +10135,7 @@ class Backdoor:
     self.aes     = None;
     self.aes_e2e = False;
     self.parent  = parent;
+    self.data_burst_len = 1;
     try:
       import socket;
     except:
@@ -10397,6 +10272,175 @@ class Backdoor:
     if self.aes_e2e == True:
       payload = self.aes.decrypt(payload);
     return payload;
+
+
+
+# def bs(self, addr, bitfield ):
+#   rts = self.rd( addr, 1 );
+#   data_new = rts[0] | bitfield[0];  # OR in some bits
+#   self.wr( addr, [data_new] );
+
+# def bc(self, addr, bitfield ):
+#   rts = self.rd( addr, 1 );
+#   data_new = rts[0] & ~ bitfield[0];# CLR some bits
+#   self.wr( addr, [data_new] );
+
+##############################################################################
+# functions to send Backdoor commands to openocd over TCP Sockets
+class OpenOCD:
+  def __init__ ( self, parent, ip, port, telnet_port ):
+    self.parent  = parent;
+    self.ip = ip;
+    self.port = port;# ie 3333
+    self.telnet = telnet_port;# ie 4444
+    self.sock = True;
+    self.data_burst_len = 1;# After Connect HW might change this to 31
+    log( self.parent , [ "Establishing class OpenOCD interface to %s : %d" % ( ip, port )]);
+    return;
+
+  def close ( self ):
+    return;
+
+  def quit(self):
+    return;
+
+  def bs(self, addr, bitfield ):
+    rts = self.rd( addr, 1 );
+    data_new = rts[0] | bitfield[0];  # OR in some bits
+    self.wr( addr, [data_new] );
+    return;
+
+  def bc(self, addr, bitfield ):
+    rts = self.rd( addr, 1 );
+    data_new = rts[0] & ~ bitfield[0];# CLR some bits
+    self.wr( addr, [data_new] );
+    return;
+
+  def wr(self, addr, data, repeat = False ):
+    try:
+      import socket;
+      with socket.create_connection(( self.ip, self.port)) as self.sock:
+        for each in data:
+#         print("w %08x %08x" % ( addr, each ) );
+          self.write_memory_32("%08x" % addr, "%08x" % each );
+          if repeat == False:
+            addr += 4;
+    except:
+      log( self.parent , [ "ERROR: class OpenOCD wr() to %s : %d" % ( self.ip, self.port )]);
+    return;
+
+  def send_cmd(self, cmd ):
+    rts = "";
+    if True:
+      import telnetlib;
+      with telnetlib.Telnet( self.ip, self.telnet ) as tn:
+        tn.write(cmd.encode('ascii') + b"\n")
+        time.sleep(0.1)
+        rts = tn.read_very_eager().decode('ascii');
+
+    if False:
+      import socket;
+      with socket.create_connection(( self.ip, self.port)) as self.sock:
+        print( cmd, len(cmd) );
+        if cmd == "continue":
+          cmd = "vCont;c";
+          cmd = "c";
+        elif cmd == "step":
+          cmd = "vCont;s";
+        elif cmd == "halt":
+          cmd = "vCont;t";
+#       cmd = "vCont;c";
+#       cmd = "c";
+        print(cmd);
+        packet = f"${cmd}#{self.checksum(cmd)}";
+        self.sock.sendall(packet.encode());
+#       rts = self.send_gdb_command( self.sock, cmd);
+#       rts = self.send_gdb_command( self.sock, "c");
+#       rts = self.send_gdb_command( self.sock, "monitor " + cmd);
+#   except:
+#     log( self.parent , [ "ERROR: class OpenOCD send_cmd() to %s : %d" % ( self.ip, self.port )]);
+#   print( rts );
+    return [rts];
+
+# Measured RLE-Pod download times
+#[ Digilent HS2 ]
+# 31 DWORDs =  2,022 ms
+#  1 DWORD  = 26,410 ms
+#[ Segger JLink @ 4M ]
+# 31 DWORDs =  2,621 ms
+#  1 DWORD  = 35,580 ms
+
+  def rd( self, addr, num_dwords=1, repeat = False ):
+    rts = [];
+    i = num_dwords;
+    max_burst = self.data_burst_len;# 1 or 31
+    try:
+      import socket;
+      with socket.create_connection(( self.ip, self.port)) as self.sock:
+        while i > 0:
+          if i >= max_burst:
+            rts += self.read_memory_32("%08x" % addr, max_burst );
+            i = i - max_burst;
+          else:
+            rts += self.read_memory_32("%08x" % addr, i  );
+            i = 0;
+    except:
+      log( self.parent , [ "ERROR: class OpenOCD rd() to %s : %d" % ( self.ip, self.port )]);
+    return rts;
+
+  def checksum(self,data):
+    return format(sum(ord(c) for c in data) % 256, '02x');
+
+  def send_gdb_command(self, sock, command):
+    packet = f"${command}#{self.checksum(command)}";
+    sock.sendall(packet.encode());
+    return self.receive_response(sock);
+
+  def receive_response(self,sock):
+    response = b"";
+    while True:
+      chunk = sock.recv(4096);
+      response += chunk;
+      if b'#' in chunk:
+        break;
+    start = response.find(b'$') + 1;
+    end = response.find(b'#');
+    return response[start:end].decode();
+
+  def swap_endian(self, hex_str):
+    # Assumes hex_str is 8 characters (32 bits)
+    bytes_list = [hex_str[i:i+2] for i in range(0, len(hex_str), 2)];
+    return ''.join(reversed(bytes_list));
+
+  def read_memory_32(self, address, num_dwords, endian='big'):
+    import socket;
+    host = self.ip;
+    port = self.port;
+    dword_list = [];
+    command = "m%s,%d" % ( address, 4*num_dwords );
+    value = self.send_gdb_command(self.sock, command)
+    while value:
+      dword = value[0:8];
+      value = value[8:];
+      if endian == 'big':
+        dword = self.swap_endian(dword);
+      dword_list += [ int( dword, 16) ];
+    return dword_list;
+
+  def write_memory_32(self, address, value_hex, endian='big'):
+    import socket;
+    host = self.ip;
+    port = self.port;
+    if len(value_hex) != 8:
+        raise ValueError("Value must be 8 hex characters (32 bits)")
+    if endian == 'big':
+        value_hex = self.swap_endian(value_hex)
+    command = "M%s,4:%s" % ( address, value_hex );
+    response = self.send_gdb_command(self.sock, command)
+    if response != "OK":
+      log( self.parent , [ "ERROR: class OpenOCD: write_memory_32()" ]);
+    return;
+
 
 
 ###############################################################################
@@ -10540,7 +10584,8 @@ def init_globals( self ):
 def init_vars( self, file_ini ):
   # Load App Variables with Defaults.
   vars   = {}; # Variable Dictionary
-  vars["font_name"] = "dejavusansmono";
+# vars["font_name"] = "dejavusansmono";
+  vars["font_name"] = "";
   vars["font_size"] = "16";
   vars["font_size_toolbar"] = "16";
   vars["file_log"]  = "sump3_log.txt";
@@ -10579,10 +10624,13 @@ def init_vars( self, file_ini ):
   vars["sump_remote_telnet_en"     ] = "0";
   vars["sump_remote_telnet_port"   ] = "23";
   vars["sump_remote_telnet_host"   ] = "127.0.0.1";# vs *.*.*.* or ""
-  vars["bd_connection"             ] = "tcp";
+  vars["bd_connection"             ] = "bd_server";# bd_server or openocd
   vars["bd_protocol"               ] = "poke";
   vars["bd_server_ip"              ] = "localhost";
   vars["bd_server_socket"          ] = "21567";
+  vars["openocd_ip"                ] = "192.168.1.109";
+  vars["openocd_socket"            ] = "3333";
+  vars["openocd_telnet"            ] = "4444";
   vars["bd_server_quit_on_close"   ] = "1";
   vars["aes_key"                   ] = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
   vars["aes_authentication"        ] = "0";
@@ -10668,6 +10716,7 @@ def init_vars( self, file_ini ):
     "screen_console_height", "screen_measurements_tall", "screen_adc_sample_points", "screen_save_image_format",
     "screen_analog_line_width", "screen_analog_bold_width", "screen_max_text_stats_width",
     "bd_connection","bd_protocol","bd_server_ip","bd_server_socket","bd_server_quit_on_close",
+    "openocd_ip", "openocd_socket", "openocd_telnet",
     "aes_key", "aes_authentication",
     "sump_remote_file_en", "sump_remote_telnet_en", "sump_remote_telnet_port", "sump_remote_telnet_host",
     "sump_script_startup","sump_script_triggered","sump_script_shutdown",
@@ -11077,7 +11126,18 @@ def cmd_create_signal( self, words, defer_update = False ):
 
       if ( self.sump.rle_hub_pod_dict.get( hubpod_name  ) != None ):
         (hub,pod) = self.sump.rle_hub_pod_dict[ hubpod_name ];
+        old_source = my_sig.source;
         my_sig.source = "digital_rle[%d][%d][%s" % ( hub, pod, rip_num );
+#       print("cmd_create_signal() : Replacing %s with %s" % ( old_source, my_sig.source ) );
+        log( self, ["cmd_create_signal(): Replacing %s with %s" % ( old_source, my_sig.source ) ] );
+      else:
+        log( self, ["cmd_create_signal(): ERROR: Lookup on %s failed" % ( my_sig.source ) ] );
+#       print("cmd_create_signal() : Lookup Failed. Keeping %s" % ( old_source ) );
+#       print("self.rle_hub_pod_dict{}");
+#       for key in self.sump.rle_hub_pod_dict:
+#         print("  %s = %s" % ( key, self.sump.rle_hub_pod_dict[key] ) );
+#         #HERE101
+
 #     else:
 #       print("WARNING: Strange source key %s" % my_sig.source );
 #       for key in self.sump.rle_hub_pod_dict:
@@ -11128,6 +11188,7 @@ def cmd_create_signal( self, words, defer_update = False ):
 #   signal_list_modified(self);
     signal_list_modified(self, my_signal = my_sig );
 
+# start_time = self.pygame.time.get_ticks();
 # stop_time = self.pygame.time.get_ticks();
 # render_time = stop_time - start_time;
 # sig_type = my_sig.type;
@@ -14041,6 +14102,11 @@ def cmd_write( self, words ):
     rts = [ "ERROR cmd_write( %s %s) : Write to Hardware failed." % ( words[1],words[2] ) ];
   return rts;
 
+#####################################
+def cmd_openocd( self, words ):
+  rts = [];
+  rts = self.bd.send_cmd( words[1] );
+  return rts;
 
 #####################################
 def cmd_source( self, words ):
@@ -14718,6 +14784,7 @@ def proc_cmd( self, cmd, quiet = False ):
 
   elif cmd_txt == "sump_user_read"    : rts = cmd_sump_user_read(self, words ); valid = True;
   elif cmd_txt == "sump_user_write"   : rts = cmd_sump_user_write(self, words ); valid = True;
+  elif cmd_txt == "openocd"           : rts = cmd_openocd(self, words); valid = True;
 
   elif cmd_txt == "sump_set_trigs"    : rts = cmd_sump_set_trigs(self,words ); valid = True;
 # elif cmd_txt == "sump_clr_trigs"    : cmd_sump_clr_trigs(self,words); valid = True;
@@ -15010,6 +15077,7 @@ def init_manual( self ):
   a+=["  print             : Print the value of an environment variable.    "];
   a+=["  r <addr>          : Read <addr> accessed via bd_server.            "];
   a+=["  w <addr> <data>   : Write <data> to <addr> accessed via bd_server. "];
+  a+=["  openocd <cmd>     : Issue <cmd> via telnet to openocd server.      "];
   a+=[" 4.6 *NIX subsystem                                                  "];
   a+=["  pwd               : Display current directory path.                "];
   a+=["  cd                : Change current directory.                      "];
@@ -15029,13 +15097,16 @@ def init_manual( self ):
   a+=[" Variables are loaded from the sump3.ini file on startup and internal"];
   a+=[" variables are the written back out to sump3.ini on exit.            "];
   a+=["  5.1 bd_server                                                              "];
-  a+=["   bd_connection              : 'tcp' only supported connection type.        "];
+  a+=["   bd_connection              : 'bd_server' or 'openocd' connection.  "];
   a+=["   bd_protocol                : 'poke' only supported connection protocol.   "];
   a+=["   bd_server_ip               : 'localhost' or IP ('127.0.0.1') of bd_server."];
   a+=["   bd_server_socket           : '21567' TCP/IP socket of bd_server.   "];
   a+=["   bd_server_quit_on_close    : Quit bd_server when GUI closes.       "];
   a+=["   aes_key                    : 256 bit hex AES key.                  "];
   a+=["   aes_authentication         : 1 = use AES authentication for remote."];
+  a+=["   openocd_ip                 : 'localhost' or IP ('127.0.0.1') of openocd."];
+  a+=["   openocd_socket             : '3333' TCP/IP socket of openocd      "];
+  a+=["   openocd_telnet             : '4444' TCP/IP socket of openocd telnet"];
   a+=["  5.2 SUMP Hardware                                                  "];
   a+=["   sump_uut_addr              : Base address of SUMP Control+Data Regs.  "];
   a+=["   sump_user_ctrl             : 32 bit user_ctrl mux setting.            "];
