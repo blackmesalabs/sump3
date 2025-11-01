@@ -186,6 +186,7 @@
 # 2025.09.29 : Fixed class sump_virtual() missing support for Verilog generate instances.
 # 2025.09.29 : Fixed crash in display_raw_text() from undefined txt.
 # 2025.10.04 : Added class OpenOCD() for JTAG openocd support.
+# 2025.10.13 : create_view_selections() iterate twice to remove duplicates from UISelectionList
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -319,7 +320,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.10.05";
+    self.vers = "2025.10.13";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -4448,9 +4449,16 @@ def create_view_selections( self ):
   # as their contents depend on which 1 of 3 windows is selected.
   # Probably easiest just to recalculate rather than store 3 copies.
   # 1st, empty both selectors
+# for i in [ assigned, available ]:
+#   for each_item in self.container_view_list[i].item_list:
+#     self.container_view_list[i].remove_items( each_item["text"] );
+
+  # 2025.10.13 a new version of PyGame-GUI was leaving leftover entires
+  # This new scheme of iterating until zero seems to fix the issue.
   for i in [ assigned, available ]:
-    for each_item in self.container_view_list[i].item_list:
-      self.container_view_list[i].remove_items( each_item["text"] );
+    while len( self.container_view_list[i].item_list ) != 0:
+      for each_item in self.container_view_list[i].item_list:
+        self.container_view_list[i].remove_items( each_item["text"] );
 
   # Look at the assigned views for all three windows and make a list of
   # user_ctrl attributes. This list will then be used to remove any 
@@ -10931,27 +10939,26 @@ def list2filegz( file_name, list ):
 
 
 ###############################################################################
-#  0123456
-#0   /|\
-#1  / | \
-#2  _ | _
-#3 |_  |_A
-#   __          
-#  |  \  | \ / |  |
-#  |--   |  |  |  |
-#  |  /  |     |  |
-#   --             ----
+#  012..31
+#0           
+#1           
+#..
+#31              
 #########################
 def create_icon( self ):
   self.icon_surface = self.pygame.Surface( ( 32,32 ) );
   self.icon_surface = self.icon_surface.convert();# Makes blitting faster
   self.icon_surface.fill( self.color_bg );
-  arrow_list = [(9,16),(9,0),(0,8),(9,0),(18,8) ];
-  c1_list    = [(6,16),(0,16),(0,32),(6,32)];
-  c2_list    = [(18,16),(12,16),(12,32),(18,32)];
-  self.pygame.draw.lines(self.icon_surface,self.color_fg,False,arrow_list,2);
-  self.pygame.draw.lines(self.icon_surface,self.color_fg,False,c1_list,2);
-  self.pygame.draw.lines(self.icon_surface,self.color_fg,False,c2_list,2);
+  c1_list    = [ (5,24), (10,24 ), (10,16), (21,16), (26,22) ];
+  c2_list    = [ (8,27), (22,27),  (22,26),  (7,26), 
+                 (23,26),  (23,25), (6,25), (6,24), 
+                 (5,24), (25,24 ), (25,23), (10,23), 
+                 (24,23), (24,22), (10,22),(10,21),(24,21),
+                 (24,20), (10,20), (10,19),(23,19),(23,18),
+                 (10,18), (10,17), (22,17)];
+  self.pygame.draw.lines(self.icon_surface,self.color_fg,False,c1_list,2);# Mesa Outline
+  self.pygame.draw.lines(self.icon_surface,self.color_fg,False,c2_list,2);# Mesa Fill
+  self.pygame.draw.circle(self.icon_surface,self.color_fg,(16,16), 15, width=3 );# Circle
   return self.icon_surface;
 
 
@@ -11348,6 +11355,22 @@ def cmd_debug( self, words ):
 #   print(each_win.panel.relative_rect);# ( x,y,w,h )
   for each_applied_view in self.view_applied_list:
     print( each_applied_view.name );
+
+  assigned  = len( self.container_view_list )-2;
+  available = assigned + 1;
+
+  new_item_list = [];
+  for i in [ assigned ]:
+    print("Found %d items" % len( self.container_view_list[i].item_list ) );
+    for each_item in self.container_view_list[i].item_list:
+      new_item_list += [ each_item ];
+      self.container_view_list[i].remove_items( each_item["text"] );
+    print("Now have %d items" % len( new_item_list ) );
+# for i in [ assigned ]:
+#   for each_item in self.container_view_list[i].item_list:
+#     self.container_view_list[i].remove_items( each_item["text"] );
+#     print( each_item );
+# self.container_view_list[0].rebuild();# 2025.10.13
   return;
 
 
