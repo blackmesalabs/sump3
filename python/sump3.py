@@ -169,7 +169,7 @@
 # 2025.04.29 : bd_shell console close_window_button enabled to be Pygame-GUI 0.6.13 compatible.
 # 2025.04.29 : Tweaked image offsets in container_builder_waveforms() to align with > 0.6.9 changes.
 # 2025.07.11 : Draw wide trigger bar when trigger is offscreen.
-# 2025.07.11 : Removed status read immediately after arm as created samples. HERE52.
+# 2025.07.11 : Removed status read immediately after arm as created samples. 
 # 2025.07.11 : Added 2nd attempt for list2file() which rando failed every so often.
 # 2025.08.05 : Implemented offset_codes.
 # 2025.08.22 : Added try+except to log file writes and flushes.
@@ -187,6 +187,10 @@
 # 2025.09.29 : Fixed crash in display_raw_text() from undefined txt.
 # 2025.10.04 : Added class OpenOCD() for JTAG openocd support.
 # 2025.10.13 : create_view_selections() iterate twice to remove duplicates from UISelectionList
+# 2025.11.10 : proc_acq_adc() Log trigger changes as bd_shell hints.
+# 2025.11.24 : Load_View added. Fixed trigger adjust with cursors when bd_shell open.
+# 2025.11.25 : Added yellow select box for bd_shell cmd_console. Improved waveform win selection.
+# 2025.12.01 : Improvements to select/deselect process esp with bd_shell.
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -194,31 +198,10 @@
 # TODO: cmd_apply_view doesn't handle user_ctrl clashes correctly, for example if 
 #       digital_ls is used it may wrongly reject RLE Pods with user ctrls.
 #
-# DONE: view filter on user_ctrl bits
-# DONE: Offline mode. Should always come up and display last capture data
 # TODO: Display trigger relative time in each window bottom left/right corners.
-# DONE: RLE rendering without decompression
 # TODO: Resolve signal class have both window and parent attributes
-# DONE: Cursors are locked to screen and don't pan/zoom with window
-# DONE: Zoom/Pan doesn't go back to zero after a new download
-# BUG: If now views are present on the download, nothing will show up when
-# you start adding views until you download again.
-# BUG: Cursors relative to trigger seems off between timezones.
-# DONE: Can timezone names of "ls", "hs" and "rle" be default based on source?
-# DONE: Scroll Bar isn't working right for "Trig Type" selection.
-# DONE: Remote button pressing. Perhaps via text file?
-# TODO: Process more than a single DWORD of digital LS bits.
-# DONE: Multi clock domain support for RLE pods.
-# TODO: AND triggers and Pattern triggers across multiple RLE pods.
-# DONE: save_view doesn't save trigger attributes.
-# DONE: force_trig doesn't work.
 # TODO: scale and offset controls go off into weeds at fine scale.
-# TBD:  sump_acquire_continuous command?
-# TBD:  LS pre-trig is filling entire RAM, ignoring trigger position.
-# TBD:  More decimal places than just 1/10ths for some measurements.
-# DONE: Analog triggering not working?
 # TODO: sump_read_config() and sump.rd_cfg() should be consolidated.
-# DONE: rle_masked should be prevented in GUI if not possible in HW.
 #
 # Todays Bugs:
 #  DONE triggerable = True not in view rom file.
@@ -242,22 +225,6 @@ from collections import deque
 
 # https://pygame-gui.readthedocs.io/en/v_067/index.html
 # python -m pip install pygame-gui
-
-#print("Importing module PyGame");
-#import pygame;
-#print ( pygame.__version__ );
-#print("Importing module PyGame-GUI");
-#import pygame_gui;
-#import importlib.metadata;
-#print( importlib.metadata.version(pygame_gui) );
-#print ( pygame_gui.__version__ );
-#print ( dir( pygame_gui ) );
-#print ( pygame_gui.__doc__  );
-#print ( pygame_gui.__file__  );
-#print ( pygame_gui.__loader__  );
-#print ( pygame_gui.__name__  );
-#print ( pygame_gui.__package__  );
-#print ( pygame_gui.__spec__  );
 
 # Python does not come with PyGame and PyGame-GUI by default, so do some text
 # based hand holding when those modules are not yet installed.
@@ -320,7 +287,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.10.13";
+    self.vers = "2025.12.01";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -441,15 +408,27 @@ class main:
  
   def process_events(self):
     for event in pygame.event.get():
+      if event.type == pygame.QUIT:
+        self.running = False
+        shutdown(self);
+
+      # Convert PyGame events into UI events
+      self.ui_manager.process_events(event);
+
+#     if event.type != pygame.MOUSEMOTION:
+#       log( self, [ str(event) ] );
+
+#     if self.cmd_console.visible and event.type == pygame.MOUSEWHEEL:
+#       self.cmd_console.vertical_scroll_bar.update_scroll_position();
+#     print( dir( self.cmd_console.text_box ) );
+#       self.cmd_console.process_event(event);
+#     if event.type != pygame.MOUSEMOTION:
+#       log( self, [ str(event) ] );
 #     button1_handled = False;
 #     if event.type != 1024:
 #       print("-----");
 #       print( event.type );
 #       print( dir( event ) );
-      if event.type == pygame.QUIT:
-        self.running = False
-        shutdown(self);
-     
 
       # Keep track of focus, otherwise scroll wheel may click when moving mouse 
       # across the windows screen even though this application doesn't have focus.
@@ -496,14 +475,10 @@ class main:
 #       self.refresh_waveforms = True;
 #       self.refresh_window_list = [0,1,2];
 #       self.refresh_cursors   = True;
-
-
 #       update_cursors_to_window( self );
 #       update_cursors_to_mouse(self);
-
 #       self.refresh_waveforms = True;
 #       self.refresh_cursors = True;
-
 #       self.refresh_waveforms = True;
 #       self.screen= pygame.display.set_mode(event.dict['size'], pygame.RESIZABLE );
 #       if True:
@@ -545,6 +520,12 @@ class main:
 #       button1_handled = False;
 #       new_window_selected = False;
 
+        # Deselect any acquisition selected text
+        if event.button == 1 : 
+          if self.select_text_i != None:
+            self.select_text_i = None;
+
+        # Left-Click
         if event.button == 1 : 
           # Note: when file_dialog is open, click to closing would select the window
           # underneath, so check for it and ignore.
@@ -552,7 +533,19 @@ class main:
 #         if self.file_dialog == None:
 #         print( wave_i , self.window_selected );
 #         if wave_i != None and self.window_selected != None and self.file_dialog == None:
-          if wave_i != None and                                  self.file_dialog == None:
+
+#         # Mouse inside bd_shell cmd_console?
+          (x,y,w,h ) = self.cmd_console.relative_rect;# Dimensions
+          if ( ( self.mouse_x > x )   and
+               ( self.mouse_x < x+w ) and
+               ( self.mouse_y > y   ) and
+               ( self.mouse_y < y+h ) and
+               self.cmd_console.visible == True and self.file_dialog == None ):
+            select_window( self, 3 );# Select bd_shell
+#HERE52
+
+          elif wave_i != None and self.file_dialog == None:
+#         if wave_i != None and self.file_dialog == None:
             # There are delta issues when switching windows with different time_zones
             # Hack fix is to deselect cursors.
             if self.window_selected != None:
@@ -568,7 +561,6 @@ class main:
           
 #         if wave_i != None and wave_i != self.window_selected and self.file_dialog == None:
 #         if wave_i != None and self.window_selected != None and self.file_dialog == None:
-
 #       if event.button == 1 : 
 #         self.mouse_btn1_dn = pygame.mouse.get_pos();# (x,y)
 #         # Note: when file_dialog is open, click to closing would select the window
@@ -583,8 +575,9 @@ class main:
 #           if window_selected_old != self.window_selected:
 #             button1_handled = True;
 #             new_window_selected = True;
-
 #       if event.button == 1 and button1_handled == False : 
+
+        # Left-Click
         if event.button == 1 :
           self.mouse_btn1_dn = pygame.mouse.get_pos();# (x,y)
 #         (wave_i, zone_i ) = mouse_get_zone( self );
@@ -601,17 +594,21 @@ class main:
 #         update_cursors_to_mouse(self);
 #         self.refresh_cursors = True;
 
+        # Middle-Click
         elif event.button == 2 : 
-#         print("Button2");
           self.mouse_btn2_dn  = pygame.mouse.get_pos();# (x,y)
           self.mouse_pinch_dn = pygame.mouse.get_pos();# (x,y)
+#         print("Button2");
+
+        # Right-Click
         elif event.button == 3 : 
+          self.mouse_btn3_dn  = pygame.mouse.get_pos();# (x,y)
+          self.mouse_pinch_dn = pygame.mouse.get_pos();# (x,y)
 #         print("Button3");
+
 #         rts = proc_unselect(self);
 #         if rts:
 #           self.refresh_waveforms = True;
-          self.mouse_btn3_dn  = pygame.mouse.get_pos();# (x,y)
-          self.mouse_pinch_dn = pygame.mouse.get_pos();# (x,y)
 
       # MOUSEBUTTONUP
       if event.type == pygame.MOUSEBUTTONUP:
@@ -821,6 +818,7 @@ class main:
         # 4==ScrollUp 5==ScrollDown
         if ( self.has_focus and (  event.button == 4 or event.button == 5 ) and \
              self.window_selected != None and \
+             not self.bd_shell_selected and \
              (( tick_time - self.last_scroll_wheel_tick ) < 3000 ) and \
              not self.mouse_motion and not self.mouse_motion_prev ):
           (wave_i, zone_i ) = mouse_get_zone( self );
@@ -940,7 +938,6 @@ class main:
 #             update_toggle_buttons(self);
 #           if wave_i != self.window_selected:
 #             select_window( self, wave_i );
-
 #           if wave_i != self.window_selected:
 #             self.cursor_list = [];
 #             self.cursor_list[0].delta_txt = None;
@@ -949,20 +946,17 @@ class main:
 #               each_cursor.trig_delta_t = None;
 #               each_cursor.trig_delta_unit = None;
 #             select_window( self, wave_i );
-
 #           update_cursors_to_window(self);# cursor sample time unit may change
 #           display_text_stats( self );# 2025.07.03 update self.cursor_list[0].delta_txt
 #           self.refresh_waveforms = True;
 #           print("self.window_selected is %d" % self.window_selected);
 #           print( self.cursor_list[0].delta_txt );
 #           self.refresh_window_list += [ wave_i ];
-
 #   wave_i = self.window_selected;
 #   timezone = self.window_list[wave_i].timezone;
 #   for (i,each_win) in enumerate( self.window_list ):
 #     if (timezone == each_win.timezone ):
 #       if i not in self.refresh_window_list:
-
 #           if ( self.window_list[wave_i].panel.visible == True ):
 #             if self.window_list[wave_i].panel.border_colour != self.color_white:
 #               self.refresh_waveforms = True;
@@ -976,10 +970,8 @@ class main:
 #               self.window_selected = wave_i;# 0,1 or 2
 #               if self.container_view_list[0].visible:
 #                 create_view_selections(self);
-
-      # Convert PyGame events into UI events
-      self.ui_manager.process_events(event)
-
+#     # Convert PyGame events into UI events
+#     self.ui_manager.process_events(event)
 #     if event.type != pygame.MOUSEMOTION:
 #       self.refresh_waveforms = True;
 #       self.container_list[0].hide(); print("Hide");
@@ -995,18 +987,17 @@ class main:
 #     if event.type == 1026:
 #         print("Oy!");
 
+      # command typed in bd_shell followed by <ENTER>
       if event.type == pygame_gui.UI_CONSOLE_COMMAND_ENTERED:
         if event.ui_element == self.cmd_console:
           cmd_str = event.command;
-#         print("Oy!");
-#         print( dir( self.cmd_console ) );
-#         print( self.cmd_console.command_entry.text );
-#         print( self.cmd_console.command );
-#         print( len( cmd_str ));
+          log( self, [ cmd_str ] );
           proc_cmd( self, cmd_str );
           self.cmd_console.command_entry.set_text("");
           self.cmd_console.command_entry.unfocus();
           self.cmd_console.command_entry.focus();
+          self.refresh_waveforms = True;
+
           # See pygame_gui.elements.ui_text_entry_line module
           # Annoying bug after command the cursor position shifts right
 #         self.cmd_console.command_entry.set_text("");
@@ -1019,7 +1010,6 @@ class main:
 #         self.cmd_console.command_entry.set_cursor_position(0);
 #         self.cmd_console.command_entry.start_text_offset = 0;
 #         print( dir( self.cmd_console.command_entry ));
-          self.refresh_waveforms = True;
 
       if event.type == pygame.KEYDOWN:
         rts = proc_key(self, event );
@@ -1069,14 +1059,17 @@ class main:
         if ( event.ui_object_id == "#Controls.#Views.#Hidden.#item_list_item" ):
           self.refresh_waveforms = True;
 
-
         # TODO: On startup need to select/unselect buttons for Display A+D buttons
         if ( event.ui_object_id == "#Controls.#Display.#Window-1" ):
           self.window_list[0].panel.visible = not self.window_list[0].panel.visible;
           if self.window_list[0].panel.visible :
             self.screen_windows = ( self.screen_windows & 0xE ) + 0x1;
+            self.window_selected = 0;
+            select_window(self, self.window_selected);
           else:
             self.screen_windows = ( self.screen_windows & 0xE ) + 0x0;
+            if self.window_selected == 0:
+              auto_select_window(self);
           self.vars["screen_windows"] = "%01x" % self.screen_windows;
           screen_erase(self);
           resize_containers(self);
@@ -1085,18 +1078,27 @@ class main:
           self.window_list[1].panel.visible = not self.window_list[1].panel.visible;
           if self.window_list[1].panel.visible :
             self.screen_windows = ( self.screen_windows & 0xD ) + 0x2;
+            self.window_selected = 1;
+            select_window(self, self.window_selected);
           else:
             self.screen_windows = ( self.screen_windows & 0xD ) + 0x0;
+            if self.window_selected == 1:
+              auto_select_window(self);
           self.vars["screen_windows"] = "%01x" % self.screen_windows;
           screen_erase(self);
           resize_containers(self);
 
         if ( event.ui_object_id == "#Controls.#Display.#Window-3" ):
           self.window_list[2].panel.visible = not self.window_list[2].panel.visible;
-          if self.window_list[1].panel.visible :
+          if self.window_list[2].panel.visible :
+            print("Win-3");
             self.screen_windows = ( self.screen_windows & 0xB ) + 0x4;
+            self.window_selected = 2;
+            select_window(self, self.window_selected);
           else:
             self.screen_windows = ( self.screen_windows & 0xB ) + 0x0;
+            if self.window_selected == 2:
+              auto_select_window(self);
           self.vars["screen_windows"] = "%01x" % self.screen_windows;
           screen_erase(self);
           resize_containers(self);
@@ -1105,26 +1107,21 @@ class main:
 #         proc_cmd( self, "time_lock" );
 #         update_toggle_buttons(self);
 
-# HERE72
         if ( event.ui_object_id == "#Controls.#Display.#bd_shell"):
-#         self.cmd_console.visible = not self.cmd_console.visible;
-          vis                      = not self.cmd_console.visible;
-          # New 2025.04.28
-#         if not self.cmd_console.visible:
+          vis = not self.cmd_console.visible;
           if not vis:
+            self.cmd_console.hide();
+          else:
+            self.cmd_console.show( );
+
 #           print("Hide console!");
 #           print( self.cmd_console.ui_container );
 #           self.cmd_console.ui_container.visible = False;
 #           self.cmd_console.ui_container.hide();
-            self.cmd_console.hide();
 #           for each in self.cmd_console.get_container():
 #             each.hide();
-          else:
-            self.cmd_console.show( );
 #           for each in self.cmd_console.get_container():
 #             each.show();
-
-           
 #         print("dir(self.cmd_console)");
 #         print( dir( self.cmd_console ) );
 #         print("__contains__");
@@ -1137,12 +1134,13 @@ class main:
             self.screen_windows = ( self.screen_windows & 0x7 ) + 0x8;
           else:
             self.screen_windows = ( self.screen_windows & 0x7 ) + 0x0;
+
           self.vars["screen_windows"] = "%01x" % self.screen_windows;
           screen_erase(self);
           resize_containers(self);
+
 #         pygame.display.update();# New 2025.04.29     
 #         self.ui_manager.update( time_delta = 0 );# New 2025.04.29
-
 #       if ( event.ui_object_id == "#console_window.#close_button"):
 #         self.cmd_console.visible = False;
 #         screen_erase(self);
@@ -1150,10 +1148,9 @@ class main:
 #         id_str = ["#Controls","#Display", "#bd_shell"];
 #         update_toggle_buttons(self);
 
-#HERE75
         if ( event.ui_object_id == "#console_window.#close_button"):
-#         self.cmd_console.process_event( event );
           self.cmd_console.hide();
+#         self.cmd_console.process_event( event );
 #         self.cmd_console.visible = False;
 
           # Create a new version since PygameGUI just killed the original
@@ -1504,7 +1501,10 @@ def auto_select_window( self ):
   return;
 
 def select_window( self, wave_i ):
-  if wave_i != None: 
+  clr = self.container_list[0].border_colour;# Get default border color
+
+  # 0,1,2 are the three waveform windows. 3 is the bd_shell region
+  if wave_i != None and wave_i != 3: 
     # New 2023.06.16 If selected window is not visible, make it visible
     if ( self.window_list[wave_i].panel.visible != True ):
 # 2025.04.29
@@ -1513,13 +1513,12 @@ def select_window( self, wave_i ):
       resize_containers(self);# Resize based on screen dimensions
     if ( self.window_list[wave_i].panel.visible == True ):
       if self.window_list[wave_i].panel.border_colour != self.color_selected:
-        self.refresh_waveforms = True;
         self.window_list[wave_i].panel.border_colour = self.color_selected;
         self.window_list[wave_i].panel.border_width  = 2;
         self.window_list[wave_i].panel.shadow_width = 0;
         self.window_list[wave_i].panel.rebuild();
 
-        clr = self.container_list[0].border_colour;# Get default border color
+#       clr = self.container_list[0].border_colour;# Get default border color
         for (i,each) in enumerate( self.window_list ):
           if i != wave_i:
             self.window_list[i].panel.border_colour = clr;
@@ -1529,15 +1528,77 @@ def select_window( self, wave_i ):
         self.window_selected = wave_i;# 0,1 or 2
         if self.container_view_list[0].visible:
           create_view_selections(self);
+
+    # de-select bd_shell cmd_console
+    if self.bd_shell_selected:
+#     self.cmd_console.border_colour = clr;
+#     self.cmd_console.rebuild();
+#     self.cmd_console.window_title  = "bd_shell";
+      self.cmd_console.command_entry.unfocus();
+      self.bd_shell_selected = False;
+      self.cmd_console.add_output_line_to_log("Keyboard control returned to GUI",
+                                              is_bold=True, remove_line_break=False);
+#     for element in self.cmd_console.ui_container.elements:
+#       if isinstance(element, pygame_gui.elements.UITextEntryLine):
+#         element.hide(); # or element.kill() to remove it
+
+
+  elif wave_i != None and wave_i == 3: 
+    # Select bd_shell cmd_console
+    if not self.bd_shell_selected:
+      self.cmd_console.command_entry.focus();
+      self.cmd_console.add_output_line_to_log("Press <ESC> to return keyboard control to GUI",
+                                              is_bold=True, remove_line_break=False);
+      self.bd_shell_selected = True;
+
+
+#   self.cmd_console.border_colour = self.color_selected;
+#   self.cmd_console.window_title  = "BD_SHELL";
+#   self.cmd_console.border_width  = 2;
+#   self.cmd_console.shadow_width = 0;
+#   self.cmd_console.rebuild();# This crashes on Python313
+#   self.cmd_console.UITextEntryLine.show();
+#   for element in self.cmd_console.ui_container.elements:
+#     print( element );
+#     if isinstance(element, pygame_gui.elements.UITextEntryLine):
+#       element.show(); # or element.kill() to remove it
+#       print("Oy!");
+
+
+#   print( dir( self.cmd_console ) );
+#   print( dir( self.cmd_console.title_bar ) );
+#   print( dir( self.cmd_console.title_bar.colours ) );
+    # Deselect all wave windows
+#   for (i,each) in enumerate( self.window_list ):
+#     self.window_list[i].panel.border_colour = clr;
+#     self.window_list[i].panel.border_width  = 2;
+#     self.window_list[i].panel.shadow_width = 1;
+#     self.window_list[i].panel.rebuild();
+#   self.window_selected = None;
   else:
-    clr = self.container_list[0].border_colour;# Get default border color
+    # Deselect everybody
+#   clr = self.container_list[0].border_colour;# Get default border color
     for (i,each) in enumerate( self.window_list ):
       self.window_list[i].panel.border_colour = clr;
       self.window_list[i].panel.border_width  = 2;
       self.window_list[i].panel.shadow_width = 1;
       self.window_list[i].panel.rebuild();
+    # Deselect Console
+#   self.cmd_console.border_colour = clr;
+#   self.cmd_console.window_title  = "bd_shell";
+#   self.cmd_console.rebuild();
+#   self.bd_shell_selected = False;
     self.window_selected = None;
+    if self.bd_shell_selected:
+      self.cmd_console.command_entry.unfocus();
+      self.bd_shell_selected = False;
+      self.cmd_console.add_output_line_to_log("Keyboard control returned to GUI",
+                                              is_bold=True, remove_line_break=False);
+#     for element in self.cmd_console.ui_container.elements:
+#       if isinstance(element, pygame_gui.elements.UITextEntryLine):
+#          element.hide(); # or element.kill() to remove it
 # update_cursors_to_window(self);# cursor sample time unit may change
+  self.refresh_waveforms = True;# Turns any "1" "2" "3" window number back to fg
   return;
 
 
@@ -1630,17 +1691,18 @@ def display_text_stats( self ):
     else:
         rts += ["No Window Selected"];
 
-#   assigned = 4+3;
-#   available = 4+4;
     assigned  = len( self.container_view_list )-2;
     available = assigned + 1;
-#   selected = [ self.container_view_list[available].get_single_selection() ];
-#   if selected != [None]:
 
-#   assigned_selected  = self.container_view_list[assigned].get_multi_selection();
-#   available_selected = self.container_view_list[available].get_multi_selection();
     assigned_selected  = [ self.container_view_list[assigned].get_single_selection() ]; 
     available_selected = [ self.container_view_list[available].get_single_selection()];
+
+#   assigned = 4+3;
+#   available = 4+4;
+#   selected = [ self.container_view_list[available].get_single_selection() ];
+#   if selected != [None]:
+#   assigned_selected  = self.container_view_list[assigned].get_multi_selection();
+#   available_selected = self.container_view_list[available].get_multi_selection();
     
     if len(available_selected) != 0 or len(assigned_selected) != 0:
 #     rts += ["------------------"];
@@ -1663,7 +1725,6 @@ def display_text_stats( self ):
               for each_line in file_list:
                 words = " ".join(each_line.split()).split(' ') + [None] * 4;
                 if words[0] != None:
-#                 if words[0] == "create_signal":
                   if words[0] == "create_signal" or words[0] == "create_bit_group":
                     if words[1] != None:
                       rts += ["  " + words[1] ];
@@ -1747,7 +1808,6 @@ def display_text_stats( self ):
         rts += ["MouseWheel: %s" % wheel_txt ];
 
       rts += ["Time: %d%s to +%d%s" % (a,b,c,d) ];
-#     rts += ["View: %d%s to +%d%s" % (a,b,c,d) ];
 
 #   font_size = int( self.vars["font_size"] );
     font_size = int( self.vars["font_size_toolbar"] );
@@ -1827,7 +1887,6 @@ def display_text_stats( self ):
             line = line.replace("[ ","[{" );
             line = line.replace(" ]","}]" );
           if not short_text:
-#           rts += ["W%d %s" % (i+1,line) ];
             rts += ["W%d%s" % (i+1,line) ];
 
     if self.window_selected != None:
@@ -1840,6 +1899,22 @@ def display_text_stats( self ):
       trigger_index = my_win.trigger_index;
 
     if self.window_selected != None and not short_text:
+      if ( my_win.sample_period != None and
+           my_win.sample_unit   != None and
+           my_win.samples_total != None and
+           my_win.samples_shown != None      ):
+        capture_width = my_win.sample_period * my_win.samples_total;
+        visible_width = my_win.sample_period * my_win.samples_shown;
+        (a,b) = time_rounder( capture_width, my_win.sample_unit );
+        (c,d) = time_rounder( visible_width, my_win.sample_unit );
+
+        # New 2025.01.17
+        if my_win.grid_enable:
+          rts += [ "Window-%s %.1f%s/div" % ( my_win.name, (round((c/1.0),3)/10.0),d ) ];
+        else:
+          rts += [ "Window-%s" % ( my_win.name                  ) ];
+        rts += [ " Visible: %d%s of %d%s" % (c,d,a,b) ];
+
 #     win_num = self.window_selected;
 #     my_win  = self.window_list[win_num];
 #     x_space       = my_win.x_space;
@@ -1853,34 +1928,14 @@ def display_text_stats( self ):
 #     rts += [ "Window   = %s" % my_win.name ];
 #     rts += [ "timezone = %s" % my_win.timezone ];
 #     rts += [ "Window: %s,%s" % ( my_win.name, my_win.timezone ) ];
-
-      if ( my_win.sample_period != None and
-           my_win.sample_unit   != None and
-           my_win.samples_total != None and
-           my_win.samples_shown != None      ):
-        capture_width = my_win.sample_period * my_win.samples_total;
-        visible_width = my_win.sample_period * my_win.samples_shown;
-        (a,b) = time_rounder( capture_width, my_win.sample_unit );
-        (c,d) = time_rounder( visible_width, my_win.sample_unit );
 #       rts += [ "capture width = %d %s" % (a,b) ];
 #       rts += [ "visible width = %d %s" % (c,d) ];
-
-# New 2025.01.17
-        if my_win.grid_enable:
-          rts += [ "Window-%s %.1f%s/div" % ( my_win.name, (round((c/1.0),3)/10.0),d ) ];
-        else:
-          rts += [ "Window-%s" % ( my_win.name                  ) ];
-        rts += [ " Visible: %d%s of %d%s" % (c,d,a,b) ];
-
 #       if my_win.grid_enable:
 #         rts += [ "%d %s per division" % ( round((c/10.0),3),d ) ];
-
 #       if my_win.grid_enable:
 #         rts += [ "%d %s per division" % ( round((a/10.0),3),b ) ];
-
 #     else:
 #       print(my_win.sample_period, my_win.sample_unit, my_win.samples_total, my_win.samples_shown );
-
 #   if self.window_selected != None and not short_text:
 #     # List all the Views assigned to this window
 #     for (i, each_view) in enumerate( my_win.view_list ):
@@ -1929,7 +1984,6 @@ def display_text_stats( self ):
 #           t_delta = c_delta * my_win.sample_period;# Delta in time units
 #             v_delta = abs( analog_value_list[0] - analog_value_list[1] );
 #             rts += [indent+delta+"A = %0.1f %s" % ( v_delta, each_sig.units )];
-
 #       if self.cursor_list[0].visible and self.cursor_list[1].visible:
 #         c_delta = abs( c1 - c2 );# Delta in sample units
 #           if each_sig.sample_period != None:
@@ -2011,7 +2065,7 @@ def display_text_stats( self ):
                   range_min_str += each_sig.units;
                   range_max_str += each_sig.units;
                   range_txt = " "+"Range "+range_min_str+"/"+range_max_str;
-  #                 print( range_txt );
+#                 print( range_txt );
 
               # Display the values for the selected signals at each cursor
               analog_value_list = [];
@@ -2228,10 +2282,7 @@ def time_ps( input_time, input_unit ):
 
 
 ############################################################################
-# When an acquisition control param is selected, we needed to calculate
-# a slider value that corresponds to the current variable value.
-# Later when the slider has moved, we need to reverse this process to change
-# the variable value to what the user adjusted it to.
+# Format text for units
 def create_text_stats( self, single_stat, which_i ):
   ( disp_name, var_name, disp_units ) = single_stat;
   val = self.vars[var_name];
@@ -2242,60 +2293,6 @@ def create_text_stats( self, single_stat, which_i ):
     return False;
   if self.sump.cfg_dict['ana_ls_enable'] == 0 and "LS " in disp_name:
     return False;
-
-
-  if False:
-# if which_i == self.select_text_i:
-    if var_name == "sump_trigger_nth":
-      pass;
-#     self.acq_slider.increment = 2;
-#     val_int = int( val, 10 );
-#     val_float = 1000.0 * float( val_int / 500.0 );   
-#     self.acq_slider.set_current_value( val_float );
-
-#   elif var_name == "sump_trigger_type":
-#     self.acq_slider.increment = 1000.0 / len( self.acq_trig_list );
-#     for (i,each) in enumerate( self.acq_trig_list ):
-#       if each.lower() == val.lower(): 
-#         self.acq_slider.set_current_value( i * self.acq_slider.increment );
-
-#   elif var_name == "sump_trigger_delay":
-#     self.acq_slider.increment = 2;
-#     val_int = float( val );# Float in uS units
-#     time_ns = 1000.0 * val_int;
-#     clk_ns = 1000.0 / float( self.vars["sump_hs_clock_freq"] );
-#     delay_int = int( time_ns / clk_ns );
-#     if ( delay_int > 0xFFFFFFFF ):
-#       delay_int = 0xFFFFFFFF;
-#     max = math.log( (2**32-1),10 );# 9.632959861146281
-#     if delay_int == 0: delay_int = 1;
-#     delay_log = math.log( delay_int,10 );# 0-9.632959861146281
-#     delay_slider = (1000.0 * delay_log )/max;
-#     self.acq_slider.set_current_value( delay_slider );
-
-    elif var_name == "sump_trigger_analog_level":
-      rts = "%s = %s %s" % ( disp_name, "NA"   , "NA"       );
-#     rts = "%s = %s %s" % ( disp_name, val_int, disp_units );
-
-    elif var_name == "sump_trigger_location":
-#     self.acq_slider.increment = 250.0;
-      val_int = float( val );# "50.0" -> 50.0
-#     val_float = float( val_int );   
-#     self.acq_slider.set_current_value( val_float * 10.0 );
-      rts = "%s = %d %s" % ( disp_name, val_int, disp_units );
-
-    # User dials in a LS Sample Period which then becomes a clock divisor
-    # based on the ls tick clock period.
-    elif var_name == "sump_ls_clock_div":
-#     self.acq_slider.increment = 1.0;
-      val_int = int( val,10 );# tick divisor
-      val_float = float( val_int );   
-      if val_float < 1.0:
-        val_float = 1.0;
-#     self.acq_slider.set_current_value( val_float * 1.0 );
-      clk_us = 1.0 / float( self.vars["sump_ls_clock_freq"] );
-      sample_period_us = clk_us * val_float;
-      rts = "%s = %d %s" % ( disp_name, sample_period_us, disp_units );
 
   # Format the units when not default
   if ( disp_name.rstrip() == "Trig Delay" or
@@ -2354,6 +2351,8 @@ def proc_acq_adj( self, step ):
   ( acq_list, extra_txt_list, (x1,y1), bold_i ) = self.text_stats;
   acq_list_len = len( acq_list );# Needed to calculate offset into parms from gen text
 
+  new_assign = None;
+  
 
   if self.select_text_i != None:
     value = 0;
@@ -2382,7 +2381,8 @@ def proc_acq_adj( self, step ):
       if val_int < 1:
         val_int = 1;
       val_str = "%d" % val_int;
-      self.vars[var_name] = val_str;
+#     self.vars[var_name] = val_str;
+      new_assign = ( var_name, val_str );
 
     elif var_name == "sump_trigger_type":
       val_str = self.vars[var_name];
@@ -2391,7 +2391,8 @@ def proc_acq_adj( self, step ):
       i += step;
       if i < 0:                          i = 0;
       if i >= len( self.acq_trig_list ): i = len( self.acq_trig_list )-1;
-      self.vars[var_name] = self.acq_trig_list[i].lower();
+#     self.vars[var_name] = self.acq_trig_list[i].lower();
+      new_assign = ( var_name, self.acq_trig_list[i].lower() );
       
     elif var_name == "sump_trigger_analog_level":
       val_f = float( self.vars[var_name] );
@@ -2418,8 +2419,8 @@ def proc_acq_adj( self, step ):
           self.acq_parm_list[ self.select_text_i + i_offset ] = ( disp_name, var_name, disp_units );  
       if val_f < min_val : val_f = min_val;
       if val_f > max_val : val_f = max_val;
-      self.vars[var_name] = "%.3f" % val_f;
-      
+#     self.vars[var_name] = "%.3f" % val_f;
+      new_assign = ( var_name, "%.3f" % val_f );
 
     elif var_name == "sump_trigger_delay":
       # Trigger delay is specified in us but actual hardware delay counter is
@@ -2442,7 +2443,9 @@ def proc_acq_adj( self, step ):
         val_f += step * 100000;
       if val_f < min_delay : val_f = min_delay;
       if val_f > max_delay : val_f = max_delay;
-      self.vars[var_name] = "%0.0f" % val_f;
+#     self.vars[var_name] = "%0.0f" % val_f;
+      new_assign = ( var_name, "%0.0f" % val_f );
+#     log(self, ["%s = %0.0f" % ( var_name, val_f ) ] );
 
 #     print("max_delay = %d" % max_delay );
 #     trig_delay = int( 1000.0 * trig_delay / clk_ns );
@@ -2462,7 +2465,8 @@ def proc_acq_adj( self, step ):
       elif ( val_int > 40 and val_int < 60 ) : val_int = 50;
       elif ( val_int <= 40 )                 : val_int = 25;
       elif ( val_int >= 60 )                 : val_int = 75;
-      self.vars[var_name] = "%d" % val_int;
+#     self.vars[var_name] = "%d" % val_int;
+      new_assign = ( var_name, "%d" % val_int );
 
     elif var_name == "sump_ls_clock_div" or var_name == "sump_ls_sample_window":
       if var_name == "sump_ls_sample_window":
@@ -2485,7 +2489,9 @@ def proc_acq_adj( self, step ):
         val_int = 1;
       if val_int > max_div:
         val_int = max_div;
-      self.vars[var_name] = "%d" % val_int;
+#     self.vars[var_name] = "%d" % val_int;
+      new_assign = ( var_name, "%d" % val_int );
+
       try:
         clk_us = float( 1.0 / float( self.vars["sump_ls_clock_freq"] ));
       except:
@@ -2502,6 +2508,19 @@ def proc_acq_adj( self, step ):
 #       self.vars["sump_ls_sample_window"] = "%d" % sample_window_us;
 #     else:
 #       self.vars["sump_ls_sample_window"] = "%d" % 0;
+
+    if new_assign != None:
+      ( new_name, new_val ) = new_assign;
+      self.vars[ new_name ] = new_val;
+      try:
+        log(self, ["%s = %s" % ( new_name, new_val ) ] );
+      except:
+        log(self, ["ERROR %s " % ( new_name ) ] );
+
+#   try:
+#     log(self, ["%s = %s" % ( var_name, str(self.vars[var_name]) ) ] );
+#   except:
+#     log(self, ["ERROR %s " % ( var_name ) ] );
   return;
 
 
@@ -2538,16 +2557,28 @@ def display_raw_text( self, txt_list, extra_txt_list, position, bold_i ):
 ###############################################################################
 # On button-1 press, see if it is over selectable text in Acquisition pane.
 def mouse_get_text( self ):
+  # Only the acquisition panel has selectable text
+  if not self.container_acquisition_list[0].visible:
+    return;
+
   (self.mouse_x,self.mouse_y) = pygame.mouse.get_pos();
   ( x,y,w,h ) = self.select_text_rect;
   if ( ( self.mouse_x > x ) and ( self.mouse_x < x+w ) and
        ( self.mouse_y > y ) and ( self.mouse_y < y+h )     ):
-    self.select_text_i = int( ( self.mouse_y - y - self.txt_toolbar_height/3 ) / self.txt_toolbar_height );
+    i = int( ( self.mouse_y - y - self.txt_toolbar_height/3 ) / self.txt_toolbar_height );
 
-    # Deselect any selected signals as K_UP and K_DOWN won't be available
-    # if an analog signal is selected.
-    for each_sig in self.signal_list:
-      each_sig.selected = False;
+    # Prevent selecting Read Only text fields like HS Clock and HS Window, IP Address
+    if i >= 3 and i <= 9:
+      self.select_text_i = i;
+#   print( self.select_text_i );
+
+      # Deselect any selected signals as K_UP and K_DOWN won't be available
+      # if an analog signal is selected.
+      for each_sig in self.signal_list:
+        each_sig.selected = False;
+
+      # Deselect any selected windows to be consistant
+      select_window( self, None );
 
   # Prevent selecting Read Only text fields like HS Clock and HS Window
   # this is a bit of a hardcoded hack knowing HS Clock and HS Window are at 0,1
@@ -2556,9 +2587,9 @@ def mouse_get_text( self ):
 #      self.select_text_i == 2 or
 #      self.select_text_i == 3    ):
 #   self.select_text_i = None;
-  # Only the acquisition panel has selectable text
-  if not self.container_acquisition_list[0].visible:
-    self.select_text_i = None;
+# # Only the acquisition panel has selectable text
+# if not self.container_acquisition_list[0].visible:
+#   self.select_text_i = None;
 
   return;
 
@@ -2832,8 +2863,10 @@ def mouse_release_cursor( self ):
 #   ---------------------
 def mouse_get_zone( self ):
   (self.mouse_x,self.mouse_y) = pygame.mouse.get_pos();
-  wave_win = None;# 0,1 or 2 for Analog,Digital-LS,Digital-HS
+  wave_win = None;# 0,1 or 2 for 3 waveform windows. 4 = bd_shell
   win_reg = None;# 4 different regions, see above ASCII art
+
+  # Mouse inside 1 of 3 waveform windows?
   for (i, each_window) in enumerate( self.window_list ):
     each = each_window.panel;
     if each.visible == True:
@@ -2843,22 +2876,15 @@ def mouse_get_zone( self ):
            ( self.mouse_y > y   ) and
            ( self.mouse_y < y+h )     ):
         wave_win = i;
-#       if (     self.mouse_x < (x + w/4    ) ):
         if (     self.mouse_x < (x + w/8    ) ):
           win_reg = 1;
-#       elif (   self.mouse_x > (x + w - w/4) ):
         elif (   self.mouse_x > (x + w - w/8) ):
           win_reg = 4;
         elif (   self.mouse_y < (y + h/2    ) ):
           win_reg = 2;
         else:
           win_reg = 3;
-#       if (   self.mouse_y < (y + h/2    ) ):
-#         win_reg = 2;
-#       else:
-#         win_reg = 3;
   return ( wave_win, win_reg );
-
 
 
 ###############################################################################
@@ -2883,11 +2909,9 @@ def convert_object_id_to_cmd( self, id_str ):
 # elif id_str == "#Controls.#Acquisition.#Save_PNG"    : cmd_str = "save_png";
 # elif id_str == "#Controls.#Acquisition.#Save_JPG"    : cmd_str = "save_jpg";
   elif id_str == "#Controls.#Acquisition.#Save_List"   : cmd_str = "save_list";
-  elif id_str == "#Controls.#Acquisition.#Save_View"   : cmd_str = "save_view";
+# elif id_str == "#Controls.#Acquisition.#Save_View"   : cmd_str = "save_view";
   elif id_str == "#Controls.#Acquisition.#Save_Window" : cmd_str = "save_window";
   elif id_str == "#Controls.#Acquisition.#Save_Screen" : cmd_str = "save_screen";
-  elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
-  elif id_str == "#Controls.#Views.#RemoveAll"         : cmd_str = "remove_view_all";
 
   elif id_str == "#Controls.#Display.#ZoomIn"          : cmd_str = "zoom_in";
   elif id_str == "#Controls.#Display.#ZoomOut"         : cmd_str = "zoom_out";
@@ -2921,6 +2945,10 @@ def convert_object_id_to_cmd( self, id_str ):
   elif id_str == "#Controls.#Views.#Font--"            : cmd_str = "font_smaller";
   elif id_str == "#Controls.#Views.#GUI_Width"         : cmd_str = "gui_width";
   elif id_str == "#Controls.#Views.#GUI_Height"        : cmd_str = "gui_height";
+  elif id_str == "#Controls.#Views.#ApplyAll"          : cmd_str = "apply_view_all";
+  elif id_str == "#Controls.#Views.#RemoveAll"         : cmd_str = "remove_view_all";
+  elif id_str == "#Controls.#Views.#Save_View"         : cmd_str = "save_view";
+# elif id_str == "#Controls.#Views.#Load_View"         : cmd_str = "load_view";
 
 # elif id_str == "#Controls.#Display.#MaskSig"         : cmd_str = "mask_toggle_signal";
 # elif id_str == "#Controls.#Display.#HideSig"         : cmd_str = "hide_toggle_signal";
@@ -2935,11 +2963,16 @@ def convert_object_id_to_cmd( self, id_str ):
 # elif id_str == "#Controls.#Display.#InsertSig"       : cmd_str = "insert_signal";
 # elif id_str == "#Controls.#Display.#CloneSig"        : cmd_str = "clone_signal";
 
+#HERE11
   # Unselect active window when the bd_shell title bar is clicked so that
   # the arrow keys don't pan and zoom while you are typing
   elif id_str == "#console_window.#title_bar":  
-    select_window( self, None );
+#   select_window( self, None );
+    select_window( self, 3    );
     cmd_str = "";
+
+#   print("Oy!");
+
   elif id_str == "#Controls.#Acquisition.#UUT" or id_str == "#Controls.#Acquisition.#Target" : 
     name = "load_uut";
     ext = "ini";
@@ -2963,6 +2996,12 @@ def convert_object_id_to_cmd( self, id_str ):
     name = "load_vcd";
     ext = "vcd";
     path = os.path.abspath( self.vars["sump_path_vcd"] );
+    cmd_file_dialog( self, name, path, ext );
+
+  elif id_str == "#Controls.#Views.#Load_View": 
+    name = "load_view";
+    ext = "txt";
+    path = os.path.abspath( self.vars["sump_path_view"] );
     cmd_file_dialog( self, name, path, ext );
 
   elif cmd_str == None:
@@ -3571,6 +3610,7 @@ def draw_digital_lines( self, my_window ):
       self.pygame.draw.rect(my_surface,self.color_bg, pygame.Rect(0,0,w1,h1) );
       my_surface.blit(txt, (0,0));
       my_window_name_drawn = True;
+
   if not my_window_name_drawn:
     txt = my_window.name;# Window number 1,2 or 3
     txt = self.font.render(txt,True, my_color );
@@ -4627,10 +4667,13 @@ def init_widgets(self):
 #                     "Set_Trigs",   "Clr_Trigs",
                       "",
                       "Save_PZA",    "Load_PZA",
-                      "Save_VCD",    "Load_VCD",
-#                     "Save_PNG",    "Save_JPG",      
-                      "Save_List",   "Save_View",      
+                      "Save_VCD",    "Save_List",
                       "Save_Window", "Save_Screen",
+
+#                     "Save_PNG",    "Save_JPG",      
+#                     "Save_VCD",    "Load_VCD",
+#                     "Save_List",   "Save_View",      
+#                     "Save_List",   "_________",      
                     ];
 
   y_top += container_builder_acquisition( self, rect, self.y_top, button_txt_list );
@@ -4640,8 +4683,11 @@ def init_widgets(self):
 #                     "ApplyAll",    "RemoveAll",
 #                                                ];
 
-  button_txt_list = [ "GUI_Width",    "GUI_Height",
+  button_txt_list = [\
+                      "Save_View",   "Load_View", 
+                      "GUI_Width",    "GUI_Height",
                       "Font--",       "Font++",
+                      "",
                       "MaskSig",      "HideSig",     
                       "CopySig",      "PasteSig",     
                       "CutSig",       "DeleteSig",     
@@ -6100,6 +6146,27 @@ def cmd_load_uut( self, words ):
   self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
   return rts;
 
+#####################################
+# Load a view file
+def cmd_load_view( self, words ):
+  rts = [];
+  view_file = words[1];
+  view_file = view_file.replace("[SPACE]"," ");
+  log( self, ["cmd_load_view( %s )" % view_file] );
+
+  (file_path,filename) = os.path.split( view_file );
+# log( self, ["Sourcing file_path = %s , file_name = %s" % ( file_path, filename )] );
+
+  if self.sump != None:
+    cmd_str = "source " + view_file;
+    rts = [ proc_cmd( self, cmd_str ) ];
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright);
+  else:
+    txt = "ERROR: Must load pizza or connect to hardware first";
+    log( self, [ txt ] );
+    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" %s" % txt);
+
+  return rts;
 
 ########################################################
 # Creating a pizza file is finding all the text files in sump_path_ram
@@ -6114,6 +6181,10 @@ def cmd_load_uut( self, words ):
 def cmd_save_pza( self, words ):
   log( self, ["save_pza()"] );
   rts = [];
+  if self.sump == None:
+    rts += ["save_pza() ERROR : No Sump HW Connected"];
+    return rts;
+
   start_time = self.pygame.time.get_ticks();
   file_out = words[1];
 
@@ -7137,7 +7208,6 @@ def cmd_sump_arm( self ):
   self.sump.wr( self.sump.cmd_state_arm,   0x00000000 );
 
   # Reading status after arm may create undesired capture data, so don't.
-  #HERE52
   if False:
     pygame.time.wait(100);# time in mS. 
     self.sump.rd_status();
@@ -10382,6 +10452,13 @@ class OpenOCD:
     rts = [];
     i = num_dwords;
     max_burst = self.data_burst_len;# 1 or 31
+
+    # Observed unexplained openocd lockup with read bursts > 23 when using
+    # TCP access. Telnet access works fine though. HW seems fine.
+    # Issue is unresolved without explanation so capping at 23.
+    if max_burst > 22:
+      max_burst = 22;
+
     try:
       import socket;
       with socket.create_connection(( self.ip, self.port)) as self.sock:
@@ -10497,6 +10574,7 @@ def init_globals( self ):
   self.toggle = False;
   self.sump_remote_in_use = False;
   self.window_selected = None;# 0,1 or 2. When mouse is clicked and border goes yellow
+  self.bd_shell_selected = False;# When selected, routes all keys to bd_shell window.
   self.display_button_list = [];# Fixes a bug with resize vs init
   self.color_white = pygame.Color(0xFF,0xFF,0xFF);
   self.color_black = pygame.Color(0x00,0x00,0x00);
@@ -12577,7 +12655,12 @@ def cmd_remove_view( self, words ):
 
 #####################################
 # unselect an object on <ESC> or right-mouse click.
+# deselection has a priority list of who gets de-selected first:
+#  1) Any signals 
+#  2) bd_shell
+#  3) Waveform Window
 def proc_unselect( self ):
+  # Determine if any signals have been selected
   any_selected = False;
   if self.select_text_i != None:
     self.select_text_i = None;
@@ -12588,8 +12671,11 @@ def proc_unselect( self ):
         any_selected = True;
       each_sig.selected = False;
 
-# 2023.11.29
-  if not any_selected:
+# If there were no signals selected, de-select bd_shell if selected
+  if not any_selected and self.bd_shell_selected and self.window_selected != None:
+    select_window( self, self.window_selected );
+# Otherwise, de-select the selected window
+  elif not any_selected and self.window_selected != None:
     select_window( self, None );
 
   # 2024.01.12 : Call create_view_selections to unselect any selected view
@@ -12748,6 +12834,7 @@ def cmd_close_bd_shell( self ):
   print("close_bd_shell()");
   rts = [];
   close_bd_shell( self );
+  self.bd_shell_selected = False;
   return rts;
 
 #####################################
@@ -13562,6 +13649,7 @@ def cmd_load_vcd( self, words ):
   return rts;
 
 
+
 #####################################
 # Recursively find any group name(s) for a signal
 def recurs_group_name( self, signal_list, my_signal, name ):
@@ -13578,7 +13666,7 @@ def cmd_add_measurement( self, words ):
   rts = [];
   for each_sig in self.signal_list:
     if ( each_sig.name == words[1] or words[1] == "*" or each_sig.selected ):
-      rts += ["Adding %s" % each_sig.name ];
+      rts += ["add_measurement %s" % each_sig.name ];
       self.measurement_list += [ each_sig ];
 
   # Deselect so isn't displayed as selected signal cursor info
@@ -13598,7 +13686,7 @@ def cmd_remove_measurement( self, words ):
   new_list = [];
   for each_sig in self.measurement_list:
     if ( each_sig.name == words[1] or words[1] == "*" or each_sig.selected ):
-      rts += ["Removing %s" % each_sig.name ];
+      rts += ["remove_measurement %s" % each_sig.name ];
     else:
       new_list += [ each_sig ];
   self.measurement_list = new_list;
@@ -13654,21 +13742,25 @@ def image_save( self, words ):
     except:
       log(self,["ERROR: unable to mkdir %s" % filename_path]);
 
+  my_surface = None;
+
   if cmd == "save_window":
-    my_window  = self.window_list[ self.window_selected ];
-    my_image   = my_window.image;
-    my_surface = my_window.surface;
+    if self.window_selected != None:
+      my_window  = self.window_list[ self.window_selected ];
+      my_image   = my_window.image;
+      my_surface = my_window.surface;
   else:
     my_surface = self.screen;
 
-  txt = "Saving %s" % filename;
-  rts += [ txt ];
-  try:
-    self.pygame.image.save( my_surface, filename );
-    self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Saved %s" % filename);
-  except:
-    txt = "ERROR Saving %s" % filename;
+  if my_surface != None:
+    txt = "Saving %s" % filename;
     rts += [ txt ];
+    try:
+      self.pygame.image.save( my_surface, filename );
+      self.pygame.display.set_caption(self.name+" "+self.vers+" "+self.copyright+" Saved %s" % filename);
+    except:
+      txt = "ERROR Saving %s" % filename;
+      rts += [ txt ];
 # draw_surfaces(self);
   return rts; 
 
@@ -14152,7 +14244,7 @@ def cmd_source( self, words ):
   for each_path in paths:
     file_name = os.path.join( each_path, words[1] );
     if ( path.exists( file_name )):
-      rts += ["source() %s" % file_name ];
+#     rts += ["source() %s" % file_name ];
       update_file_vars( self, file_name );
       cmd_list = file2list( file_name );
       for cmd_str in cmd_list:
@@ -14462,28 +14554,28 @@ def proc_key( self, event ):
 
   # K_TAB : Tab through Windows
   elif event.key == pygame.K_TAB:
-    if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       proc_cmd( self, "win_tab" );
       rts = True;# Force a refresh
 
   elif ( event.key == pygame.K_SLASH ):
-    if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       if ( event.mod & pygame.KMOD_SHIFT ):
         proc_cmd( self, "search_backward" );
       else:
         proc_cmd( self, "search_forward" );
   elif ( event.key == pygame.K_QUESTION ):
-    if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       proc_cmd( self, "search_backward" );
 
   # K_PAGEDOWN : 
   elif event.key == pygame.K_PAGEDOWN:
-    if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       proc_cmd( self, "page_down" );
 
   # K_PAGEUP : 
   elif event.key == pygame.K_PAGEUP:
-    if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       proc_cmd( self, "page_up" );
 
   # K_PAGEUP : Tab through Windows
@@ -14502,17 +14594,7 @@ def proc_key( self, event ):
 #   resize_containers(self);
 #   rts = True;# Force a refresh
 
-  elif ( analog_signals_selected and
-#   ( ( event.key == pygame.K_LEFT  or event.key == pygame.K_a ) or
-#     ( event.key == pygame.K_RIGHT or event.key == pygame.K_d ) or
-#   ( ( event.key == pygame.K_UP    or event.key == pygame.K_w ) or
-#     ( event.key == pygame.K_DOWN  or event.key == pygame.K_s )    )) :
-#   if ( event.key == pygame.K_UP    or event.key == pygame.K_w ):
-#     k = "up";
-#   elif ( event.key == pygame.K_DOWN  or event.key == pygame.K_s ):
-#     k = "down";
-#   else:
-#     k = "";
+  elif ( analog_signals_selected and not self.bd_shell_selected and
     ( ( event.key == pygame.K_UP                               ) or
       ( event.key == pygame.K_DOWN                             )    )) :
     if ( event.key == pygame.K_UP                               ):
@@ -14555,7 +14637,8 @@ def proc_key( self, event ):
   # K_LEFT : Pan Left
 # elif event.key == pygame.K_LEFT or event.key == pygame.K_a :
   elif event.key == pygame.K_LEFT                            :
-    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 8;
@@ -14576,7 +14659,8 @@ def proc_key( self, event ):
   # K_RIGHT : Pan Right
 # elif event.key == pygame.K_RIGHT or event.key == pygame.K_d :
   elif event.key == pygame.K_RIGHT                            :
-    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 8;
@@ -14594,9 +14678,10 @@ def proc_key( self, event ):
       rts = False;# Selected window only refresh
 
   # K_UP : Zoom In  
-# elif event.key == pygame.K_UP or event.key == pygame.K_w :
   elif event.key == pygame.K_UP                            :
-    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
+    if self.file_dialog == None and not self.bd_shell_selected:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 4;
@@ -14610,13 +14695,17 @@ def proc_key( self, event ):
         if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
              self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
           rate = 1;
+        if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
+             self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
+          rate = 16;
         proc_acq_adj_inc( self, rate );
     rts = False;# Selected window only refresh
 
   # K_DOWN : Zoom Out 
-# elif event.key == pygame.K_DOWN or event.key == pygame.K_s :
   elif event.key == pygame.K_DOWN                            :
-    if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None and not self.cmd_console.visible:
+#   if self.file_dialog == None:
+    if self.file_dialog == None and not self.bd_shell_selected:
       if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
            self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
         iters = 4;
@@ -14630,16 +14719,26 @@ def proc_key( self, event ):
         if ( self.pygame.key.get_pressed()[self.pygame.K_LCTRL] or
              self.pygame.key.get_pressed()[self.pygame.K_RCTRL]   ):
           rate = 1;
+        if ( self.pygame.key.get_pressed()[self.pygame.K_LSHIFT] or
+             self.pygame.key.get_pressed()[self.pygame.K_RSHIFT]   ):
+          rate = 16;
         proc_acq_adj_dec( self, rate );
     rts = False;# Selected window only refresh
 
   # K_DELETE : Make selected invisible ( remove from display )
   # same as CLI remove_signal 
   elif event.key == pygame.K_DELETE:
-    if self.file_dialog == None and not self.cmd_console.visible:
 #   if self.file_dialog == None:
-      proc_cmd( self, "delete_signal" );
-      rts = True;# Force a refresh
+#   if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
+      # Determine if any signals have been selected
+      if self.select_text_i != None:
+        proc_cmd( self, "delete_signal" );
+        rts = True;# Force a refresh
+      elif self.window_selected != None:
+        cmd_close_window( self, ["close_window", str( self.window_selected + 1 )] );
+        rts = True;# Force a refresh
+     
 #     for each_sig in self.signal_list:
 #       if each_sig.selected:
 #         each_sig.visible = False;
@@ -14648,22 +14747,25 @@ def proc_key( self, event ):
 
   # K_INSERT : Make all signals visible and unhidden
   elif event.key == pygame.K_INSERT:
-    if self.file_dialog == None and not self.cmd_console.visible:
 #   if self.file_dialog == None:
+#   if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       proc_cmd( self, "insert_signal" );
       rts = True;# Force a refresh
 
   # K_HOME : Make all signals visible and unhidden
   elif event.key == pygame.K_HOME:
-    if self.file_dialog == None and not self.cmd_console.visible:
 #   if self.file_dialog == None:
+#   if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       proc_cmd( self, "insert_signal *" );
       rts = True;# Force a refresh
 
   # K_END : Toggle hidden attribute of selected
   elif event.key == pygame.K_END:
-    if self.file_dialog == None and not self.cmd_console.visible:
 #   if self.file_dialog == None:
+#   if self.file_dialog == None and not self.cmd_console.visible:
+    if self.file_dialog == None and not self.bd_shell_selected:
       proc_cmd( self, "hide_toggle_signal" );
       rts = True;# Force a refresh
 #     for each_sig in self.signal_list:
@@ -14676,7 +14778,7 @@ def proc_key( self, event ):
 #   if self.window_selected != None:
     # K_BACKSPACE is used in bd_shell for typing, so ignore if console is visible
     if ( self.file_dialog == None and self.window_selected != None and
-         not self.cmd_console.visible ):
+         not self.bd_shell_selected   ):
       win_num      = self.window_selected;
       my_win       = self.window_list[win_num];
       if len( my_win.zoom_pan_history ) != 0:
@@ -14688,7 +14790,7 @@ def proc_key( self, event ):
   elif event.key == pygame.K_SPACE:
     # K_SPACE is used in bd_shell for typing, so ignore if console is visible
     if ( self.file_dialog == None and self.window_selected != None and
-         not self.cmd_console.visible ):
+         not self.bd_shell_selected   ):
       for each_signal in self.signal_list:      
         if each_signal.collapsable and each_signal.selected:
           each_signal.collapsed = not each_signal.collapsed;
@@ -14703,7 +14805,7 @@ def proc_key( self, event ):
   # K_t   : Toggle trigger attribute of selected
   elif event.key == pygame.K_t:
     # K_t is used in bd_shell for typing, so ignore if console is visible
-    if ( self.file_dialog == None and not self.cmd_console.visible ):
+    if ( self.file_dialog == None and not self.bd_shell_selected ):
       for each_sig in self.signal_list:
         if each_sig.selected and each_sig.triggerable:
           each_sig.trigger = not each_sig.trigger;
@@ -14816,6 +14918,7 @@ def proc_cmd( self, cmd, quiet = False ):
   elif cmd_txt == "load_pza"          : rts = cmd_load_pza(self,words); valid = True;
   elif cmd_txt == "load_uut"          : rts = cmd_load_uut(self,words); valid = True;
   elif cmd_txt == "load_vcd"          : rts = cmd_load_vcd(self,words); valid = True;
+  elif cmd_txt == "load_view"         : rts = cmd_load_view(self,words); valid = True;
   elif cmd_txt == "save_vcd"          : rts = cmd_save_vcd( self, words ); valid = True;
   elif cmd_txt == "gui_width"         : rts = cmd_gui_width(self,words); valid = True;
   elif cmd_txt == "gui_height"        : rts = cmd_gui_height(self,words); valid = True;
@@ -15436,8 +15539,8 @@ def init_manual( self ):
   a+=["  as a timing reference point between them. It is designed to capture"];
   a+=["  thousands of signals at once, and/or using user_ctrl input muxes.  "];
   a+=["                                                                     "];
-  a+=["11.0 BD_SERVER.py                                                    "];
-  a+=["  The SUMP2.py application does not communicate directly to hardware "];
+  a+=["11.0 BD_SERVER.py and OpenOCD                                        "];
+  a+=["  The SUMP3.py application does not communicate directly to hardware "];
   a+=["  but instead uses BD_SERVER.py as an interface layer. BD_SERVER is  "];
   a+=["  a multi use server application that accepts requests via TCP to    "];
   a+=["  read and write to low level hardware and then translates those     "];
@@ -15449,7 +15552,7 @@ def init_manual( self ):
   a+=["  a standard Ethernet or Wifi connection between the two. Typical use"];
   a+=["  is to run both python applications on same machine and use the TCP "];
   a+=["  localhost feature within the TCP stack for communications.         "];
-  a+=["  The separation of sump2.py from bd_server.py allows for sump2.py to"];
+  a+=["  The separation of sump3.py from bd_server.py allows for sump3.py to"];
   a+=["  remain completely open source while internal proprietary versions  "];
   a+=["  of bd_server.py may be created to communicate with closed source   "];
   a+=["  systems.                                                           "];
@@ -15458,6 +15561,12 @@ def init_manual( self ):
   a+=["    ------------           --------------           ---------------  "];
   a+=["   |  sump3.py  |<------->| bd_server.py |<------->| SUMP Hardware | "];
   a+=["    ------------  Ethernet --------------  USB,PCI  ---------------  "];
+  a+=["                                                                     "];
+  a+=["  For SoC development with embedded CPUs, SUMP3.py supports openocd  "];
+  a+=["  as a JTAG interface to SUMP3 hardware mapped into CPU memory space."];
+  a+=["    ------------           ---------        -----         ---------  "];
+  a+=["   |  sump3.py  |<------->| openocd |<---->| CPU |<----->| SUMP HW | "];
+  a+=["    ------------  Ethernet ---------  JTAG  -----   BUS   ---------  "];
   a+=["                                                                     "];
   a+=["12.0 License                                                         "];
   a+=[" This software is released under the GNU GPLv3 license.              "];
