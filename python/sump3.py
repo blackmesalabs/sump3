@@ -191,6 +191,11 @@
 # 2025.11.24 : Load_View added. Fixed trigger adjust with cursors when bd_shell open.
 # 2025.11.25 : Added yellow select box for bd_shell cmd_console. Improved waveform win selection.
 # 2025.12.01 : Improvements to select/deselect process esp with bd_shell.
+# 2025.12.07 : Improvements cmd_openocd to accept string of params.
+# 2025.12.07 : Replaced deprecated telnetlib with telnetlib3. Requires pip install telnetlib3.
+# 2025.12.07 : cmd_write() added support for "w <addr> foo.hex" file load.
+# 2025.12.08 : create_text_stats() bug fix for Div-by-Zero on no analog_ls.
+# 2025.12.08 : cmd_read() added support for "r <addr> <len> foo.hex" file write.
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -287,7 +292,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2025.12.01";
+    self.vers = "2025.12.08";
     self.copyright = "(C)2025 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -2201,7 +2206,10 @@ def display_text_stats( self ):
 #     acq_list += [ "%s@%s" % (self.vars["uut_name"], self.vars["bd_server_ip"]) ];
 
     if self.sump_connected:
-      acq_list += [ "IP = %s" % self.vars["bd_server_ip"] ];
+      if self.vars["bd_connection"] == "openocd":
+        acq_list += [ "IP = %s" % self.vars["openocd_ip"] ];
+      else:
+        acq_list += [ "IP = %s" % self.vars["bd_server_ip"] ];
 #     hw_cfg = "HW Config  =";
 #     if self.sump.cfg_dict['dig_hs_enable'] == 1:
 #       hw_cfg += " HS";
@@ -2303,7 +2311,10 @@ def create_text_stats( self, single_stat, which_i ):
  
     # The variable used for LS Period is clock divisor, so calculate
     if disp_name.rstrip() == "LS Period":
-      clk_us = float( 1.0 / float( self.vars["sump_ls_clock_freq"] ));
+      try:
+        clk_us = float( 1.0 / float( self.vars["sump_ls_clock_freq"] ));
+      except:
+        clk_us = 0.1;# Protect against Divide-by-Zero
       sample_period_us = clk_us * val;
       val = sample_period_us;
 
@@ -2311,7 +2322,10 @@ def create_text_stats( self, single_stat, which_i ):
         ana_ram_depth    = self.sump.cfg_dict['ana_ram_depth'];
         ana_rec_profile  = self.sump.cfg_dict['ana_record_profile'];
         record_len       = ( ana_rec_profile & 0xFF000000 ) >> 24;
-        ana_sample_depth = int( ana_ram_depth / record_len );
+        try:
+          ana_sample_depth = int( ana_ram_depth / record_len );
+        except:
+          ana_sample_depth = 0;# Protect against Divide-by-Zero
         sample_window_us = ana_sample_depth * sample_period_us;
         self.vars["sump_ls_sample_window"] = "%d" % sample_window_us;
       else:
@@ -10410,8 +10424,12 @@ class OpenOCD:
   def send_cmd(self, cmd ):
     rts = "";
     if True:
-      import telnetlib;
-      with telnetlib.Telnet( self.ip, self.telnet ) as tn:
+# telnetlib is deprecated and won't work past 3.12
+#     import telnetlib;
+#     with telnetlib.Telnet( self.ip, self.telnet ) as tn:
+# Note : Requires "pip install telnetlib3"
+      import telnetlib3;
+      with telnetlib3.Telnet( self.ip, self.telnet ) as tn:
         tn.write(cmd.encode('ascii') + b"\n")
         time.sleep(0.1)
         rts = tn.read_very_eager().decode('ascii');
@@ -14201,26 +14219,60 @@ def cmd_read( self, words ):
   try:
     rts = self.bd.rd( addr, num_dwords );
     txt_rts = [ "%08x" % each for each in rts ];# list comprehension
+    if words[3] != None:
+      if ".hex" in words[3]:
+        try:
+          list2file( words[3], txt_rts );
+        except:
+          txt_rts = [ "ERROR hexlist2file( %s ) : Failed to write file." % words[3] ];
   except:
     txt_rts = [ "ERROR cmd_read( %s ) : Read of Hardware failed." % words[1] ];
   return txt_rts;
 
 
 #####################################
+# Note: Accept *.hex files created with:
+#   hexdump -e '8/4 "%08x "' -e '"\n"' main.bin > main.hex
 def cmd_write( self, words ):
   rts = [];
   addr = int(words[1],16);
-  data_list = [ int( each,16) for each in filter(None,words[2:]) ];
-  try:
-    rts = self.bd.wr( addr, data_list );
-  except:
-    rts = [ "ERROR cmd_write( %s %s) : Write to Hardware failed." % ( words[1],words[2] ) ];
+  data_list = [];
+  if ".hex" not in words[2]:
+    data_list = [ int( each,16) for each in filter(None,words[2:]) ];
+  else:
+    from os import path;
+    paths = [];
+    # UUT Path is the default path if it exists, otherwise use the CWD
+    if self.path_to_uut != None:
+      paths += [ self.path_to_uut ];
+    else:
+      paths += [ os.getcwd() ];
+
+    # Look for the file specified in the usual places.
+    # When found, set environment variables $file_name, $file_name_noext, $file_path, $file_name_fullpath
+    for each_path in paths:
+      file_name = os.path.join( each_path, words[2] );
+      if ( path.exists( file_name )):
+        file_list = file2list( file_name );
+        for each_line in file_list:
+          hex_words = " ".join(each_line.split()).split(' ');
+          data_list += hex_words;
+    data_list = [ int( each,16) for each in filter(None,data_list) ];# Hex to Int
+
+  if len( data_list ) != 0:
+    try:
+      rts = self.bd.wr( addr, data_list );
+    except:
+      rts = [ "ERROR cmd_write( %s %s) : Write to Hardware failed." % ( words[1],words[2] ) ];
   return rts;
 
 #####################################
 def cmd_openocd( self, words ):
   rts = [];
-  rts = self.bd.send_cmd( words[1] );
+# rts = self.bd.send_cmd( words[1] );
+# rts = self.bd.send_cmd( " ".join(words[1:]) );
+  # Create space separated string from list and remove any NoneType
+  rts = self.bd.send_cmd( " ".join([each for each in words[1:] if each is not None] ));
   return rts;
 
 #####################################
