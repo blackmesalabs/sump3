@@ -21,6 +21,8 @@
 # c:\python37\Scripts\pip.exe download pygame-gui
 # c:\python37\Scripts\pip.exe install *.whl          
 #
+# AES module from https://github.com/Joshua-Riek/AES
+#
 # WARNING : Latest pygame-gui breaks things. Force install of older version
 #   pip install --force-reinstall -v "pygame-gui==0.6.12"
 #
@@ -207,6 +209,7 @@
 # 2026.01.23 : Added self.sump_rle_download_history_dict to avoid RLE user_select download issue.
 # 2026.01.28 : ping() added to help debug bd_server connect issues.
 # 2026.01.29 : don't count RAM of RLE pods that are disabled. Report disabled pods.
+# 2026.02.01 : Preliminary AI assist using Google Gemini added.
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -303,7 +306,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2026.01.29";
+    self.vers = "2026.02.01";
     self.copyright = "(C)2026 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -312,6 +315,12 @@ class main:
     self.vars = init_vars( self, "sump3.ini" );
     create_dirs( self );
     list2file( self.sump_manual, init_manual(self ) );
+   
+    if self.vars["ai_engine"] != "None":
+      from sump3_ai import SUMP3_AI; 
+      self.ai = SUMP3_AI();
+    else:
+      self.ai = None;
 
 #   create_view_ontap_list(self);
 #   self.color_fg = self.vars["screen_color_foreground"];
@@ -10856,6 +10865,8 @@ def init_vars( self, file_ini ):
   vars["bd_server_keep_alive"      ] = "1";
   vars["aes_key"                   ] = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
   vars["aes_authentication"        ] = "0";
+  vars["ai_engine"                 ] = "None";
+  vars["ai_api_key"                ] = "None";
   vars["uut_name"                  ] =  None;
 # vars["uut_rev"                   ] = "00_00";
   vars["sump_uut_addr"             ] = "00000098";
@@ -10940,6 +10951,7 @@ def init_vars( self, file_ini ):
     "bd_connection","bd_protocol","bd_server_ip","bd_server_socket","bd_server_quit_on_close","bd_server_keep_alive",
     "openocd_ip", "openocd_socket", "openocd_telnet",
     "aes_key", "aes_authentication",
+    "ai_engine", "ai_api_key",
     "sump_remote_file_en", "sump_remote_telnet_en", "sump_remote_telnet_port", "sump_remote_telnet_host",
     "sump_script_startup","sump_script_triggered","sump_script_shutdown",
     "sump_path_ram","sump_path_uut","sump_path_dbg",
@@ -15063,7 +15075,6 @@ def proc_cmd( self, cmd, quiet = False ):
   valid = False;
   rts = [];
 
-
   if   cmd_txt == "refresh"           : cmd_txt = "gui_refresh";
   if   cmd_txt == "quit" or cmd_txt == "die" : cmd_txt = "exit";
   if   cmd_txt == "ur"                : cmd_txt = "sump_user_read";
@@ -15072,7 +15083,38 @@ def proc_cmd( self, cmd, quiet = False ):
   if   cmd_txt == "user_write"        : cmd_txt = "sump_user_write";
   if   cmd_txt == "cg"                : cmd_txt = "collapse_group";
 
-  if   cmd_txt == "exit"              : shutdown(self); valid = True; sys.exit();
+#HERE101
+  if self.ai != None and self.ai.is_ai_request( cmd ):
+    if self.vars["ai_api_key"] == "None":
+      api_key = None;
+    else:
+      api_key = self.vars["ai_api_key"];
+    ai_engine = self.vars["ai_engine"];
+
+    data = {};
+    data['time_units'] = "ps";
+
+    signal_list = [];
+    for each_sig in self.signal_list:
+      sample_list = list(zip(each_sig.rle_time, each_sig.values));
+      signal_dict = {};
+      signal_dict['name'] = each_sig.name;
+      sample_list2 = [];
+      for (rle_time,value) in sample_list:
+        sample_dict = {};
+        sample_dict['time']  = rle_time;
+        sample_dict['value'] = value;
+        sample_list2 +=[ sample_dict ];
+      signal_dict['samples'] = sample_list2;
+      signal_list += [ signal_dict ];
+    data['signals'] = signal_list;
+    for each_cursor in self.cursor_list:
+      data[ each_cursor.name ] = each_cursor.trig_delta_t;
+
+    prompt = "In plain text only: " + cmd + "\n" + str(data);
+    rts = [ self.ai.ask_ai( prompt = prompt, ai_engine = ai_engine, api_key = api_key )];
+
+  elif cmd_txt == "exit"              : shutdown(self); valid = True; sys.exit();
   elif cmd_txt == "source"            : rts = cmd_source(self, words ); valid = True;
   elif cmd_txt == "debug_containers"  : debug_containers(self);         valid = True;
   elif cmd_txt == "hide_all"          : hide_all(self);                 valid = True;
