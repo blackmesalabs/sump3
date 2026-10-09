@@ -112,7 +112,7 @@ u0_sump3_rle_hub
   .core_miso         ( core_miso[0]            ),
   .trigger_mosi      ( trigger_mosi[0]         ),
   .trigger_miso      ( trigger_miso[0]         ),
-  .user_bus_rd       ( 32'd0                   ),
+  .user_bus_rd_d     ( 32'd0                   ),
   .pod_mosi          ( hub0_pod_mosi[1:0]      ),
   .pod_miso          ( hub0_pod_miso[1:0]      )
 );// sump3_rle_hub
