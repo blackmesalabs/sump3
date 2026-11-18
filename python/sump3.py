@@ -3889,6 +3889,8 @@ def create_drawing_lines( self, my_win ):
         rle_min_max = ( rle_time_min, rle_time_max );
       else:
         samples_to_draw = 0;
+        rle_time_min = 0;
+        rle_time_max = 0;
 
 #       print("RLE Captured:");
 #       print(" rle_time_min   = %f ms" % ( rle_time_min   /1000000000 ));
@@ -3985,8 +3987,9 @@ def create_drawing_lines( self, my_win ):
         need_pre_leftmost   = True;
         need_post_rightmost = True;
 #       print( each_sig.name, samples_to_draw );
-        for ( i, each_value ) in enumerate( each_sig.values ):
-          rle_time = each_sig.rle_time[i];
+        # Mixed LS/RLE views in one window (e.g. ApplyAll): LS signals have
+        # values but no rle_time stamps. Zip so both lists stay in step.
+        for ( i, ( each_value, rle_time ) ) in enumerate( zip( each_sig.values, each_sig.rle_time ) ):
           # Adjust time so T=0 starts relative to most negative of ALL signal samples
           rle_time += abs( rle_time_min );
           # Draw one sample left of visible, all visible samples and one sample right of visible.
@@ -9202,6 +9205,7 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
                 each_sig.rle_time += [ int(each_time,10) ];
               else:
                 each_sig.values = [];
+                each_sig.rle_time = [];
             # Not digital_rle so must be digital_ls or digital_hs
             else:
               bit_cnt = 0; word_val = 0;
@@ -9243,6 +9247,7 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
                     each_sig.rle_time += [ int(each_time,10) ];
                 else:
                   each_sig.values = [];# Must be a RLE Masked bit, so no values at all
+                  each_sig.rle_time = [];
               except:
                 each_sig.values = [];# Most likely i index was out of range.
 
