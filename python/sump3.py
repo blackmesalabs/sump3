@@ -218,6 +218,11 @@
 # 2026.07.14 : Direct "Help" button to "manual" instead of "help" as Ash was intercepting.
 # 2026.07.23 : assign_signal_attribute_by_name() improved value == None error handling.
 # 2026.07.24 : cmd_gui_width(),_height() : pygame.event.clear() to prevent rogue font++ events.
+# 2026.07.28 : Swap ScrollUp and ScrollDown button positions.
+# 2026.08.05 : Return keyboard control to GUI when bd_shell toggled off.
+# 2026.11.02 : Log *.ini variables that have val of None.
+# 2026.11.18 : Fix IndexError in create_drawing_lines() for mixed LS/RLE in single window.
+# 2026.11.20 : cmd_apply_view() prevent adding view of different timezone to window.
 #
 # NOTE: Bug in cmd_create_bit_group(), it just enables triggerable and maskable for
 #       bottom 32 RLE bits instead of looking at actual hardware configuration.
@@ -314,7 +319,7 @@ class Options:
 ###############################################################################
 class main:
   def __init__(self):
-    self.vers = "2026.07.24";
+    self.vers = "2026.11.20";
     self.copyright = "(C)2026 BlackMesaLabs";
     pid = os.getpid();
     print("sump3.py "+self.vers+" "+self.copyright + " PID="+str(pid));
@@ -1176,6 +1181,9 @@ class main:
           vis = not self.cmd_console.visible;
           if not vis:
             self.cmd_console.hide();
+            # New 2026.08.05
+            if self.window_selected != None:
+              select_window( self, self.window_selected );
           else:
             self.cmd_console.show( );
 
@@ -2695,7 +2703,6 @@ def mouse_get_text( self ):
 # On button-1 press, see if it is over a signal name and select it.
 # Check first to see if it is a collapsable (group) parent and toggle that
 # instead if clicked by the [+]/[-] area.
-# HERE99
 def mouse_event_single_click( self ):
   (self.mouse_x,self.mouse_y) = pygame.mouse.get_pos();
   margin = 5;
@@ -3149,10 +3156,12 @@ def shutdown(self):
     self.vars["screen_y"] = str( rect.top  + ms_windows_title_bar_height );
 
   var_dump( self, "sump3.ini" ); # Dump all variable to INI file
-  log( self, ["  Thank you for using open-source Sump3 from BlackMesaLabs."] );
 
   if self.ai:
-      self.ai.close_ai_session();
+    print("Ash AI usage report:");
+    self.ai.close_ai_session();
+
+  log( self, ["Thank you for using open-source Sump3 from BlackMesaLabs."] );
 
   # Close the log file
   self.file_log.close();
@@ -3163,7 +3172,7 @@ def shutdown(self):
   if os.path.exists( filename ):
     os.rename( filename, self.vars["file_log"] );
 
-  print("  Bye!");
+  print("Bye!");
   return;
 
 ###############################################################################
@@ -3987,9 +3996,11 @@ def create_drawing_lines( self, my_win ):
         need_pre_leftmost   = True;
         need_post_rightmost = True;
 #       print( each_sig.name, samples_to_draw );
+#       for ( i, each_value ) in enumerate( each_sig.values ):
+#         rle_time = each_sig.rle_time[i];
         # Mixed LS/RLE views in one window (e.g. ApplyAll): LS signals have
         # values but no rle_time stamps. Zip so both lists stay in step.
-        for ( i, ( each_value, rle_time ) ) in enumerate( zip( each_sig.values, each_sig.rle_time ) ):
+        for ( i, ( each_value, rle_time )) in enumerate (zip( each_sig.values, each_sig.rle_time )):
           # Adjust time so T=0 starts relative to most negative of ALL signal samples
           rle_time += abs( rle_time_min );
           # Draw one sample left of visible, all visible samples and one sample right of visible.
@@ -4856,7 +4867,7 @@ def init_widgets(self):
                       "ZoomCurs",     "ZoomFull",      
                       "<-Search",     "Search->",      
                       "<-Pan",        "Pan->",      
-                      "ScrollUp",     "ScrollDown", ];
+                      "ScrollDown",   "ScrollUp", ];
 
   # Remove these buttons if the screen is really short. User will have to use
   # bd_shell CLI interface to get these features.
@@ -9216,6 +9227,7 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
                 each_sig.values += [ word_val ];
               except:
                 each_sig.values = [];# Probably a range error
+                each_sig.rle_time = [];
 
       # Single binary digital bits
       else:
@@ -9250,6 +9262,7 @@ def create_signal_values_digital( self, file_ls_name, file_hs_name, file_rle_nam
                   each_sig.rle_time = [];
               except:
                 each_sig.values = [];# Most likely i index was out of range.
+                each_sig.rle_time = [];
 
       if "digital_rle" in each_sig.source:
         if rle_valid_user_ctrl == False:
@@ -11152,7 +11165,10 @@ def var_dump( self, file_ini ):
   for key in self.var_save_list:
     val = self.vars[ key ];
 #   print( key, val );
-    txt_list.append( key + " = " + val + "\n" );
+    if val != None:
+      txt_list.append( key + " = " + val + "\n" );
+    else:
+      log( self, ["var_dump() : ERROR (key,val) (%s,%s) " % (key,val)] );
   for each in sorted( txt_list ):
     file_out.write( each );
   file_out.close();
@@ -13014,11 +13030,15 @@ def cmd_apply_view( self, words ):
 # if self.window_selected != None:
 #   for each_view in self.view_ontap_list:
 #     if each_view.name == view_name or view_name == "*":
+
   for view_name in view_name_list:
     pygame.time.wait(10);# time in ms
     start_time = self.pygame.time.get_ticks();
     for each_view in self.view_ontap_list:
-      if each_view.name == view_name and self.window_selected != None:
+#     if each_view.name == view_name and self.window_selected != None:
+      if each_view.name == view_name and self.window_selected != None and \
+        (  self.window_list[self.window_selected].timezone == each_view.timezone or \
+           self.window_list[self.window_selected].timezone == None                    ):
 
         update_file_vars( self, each_view.filename );
         cmd_list = file2list( each_view.filename );
